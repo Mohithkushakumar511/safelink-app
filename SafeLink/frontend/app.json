@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "SafeLink",
+    "slug": "safelink",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "safelink",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "org.safelink.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SafeLink needs your live GPS location to dispatch emergency services and share coordinates with your trusted contacts during an emergency.",
+        "NSContactsUsageDescription": "SafeLink needs access to contacts so you can quickly add and select trusted emergency contacts.",
+        "NSMicrophoneUsageDescription": "SafeLink needs microphone access to record voice descriptions during an emergency SOS."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0A1128"
+      },
+      "package": "org.safelink.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "READ_CONTACTS",
+        "RECORD_AUDIO",
+        "SEND_SMS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow SafeLink to track your coordinates for emergency dispatch."
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow SafeLink to import emergency contacts from your phone."
+        }
+      ],
+      "expo-asset",
+      "expo-font"
+    ]
+  }
+}

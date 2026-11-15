@@ -1,0 +1,101 @@
+import * as Linking from 'expo-linking';
+import { Platform } from 'react-native';
+
+export const SosDispatchService = {
+  buildEmergencyMessage(
+    name: string,
+    incidentId: string,
+    activationTime: string,
+    locationUrl: string,
+    isLastKnown = false,
+    emergencyDescription?: string
+  ): string {
+    const locLine = isLastKnown
+      ? `Location (Last Known Fix): ${locationUrl}`
+      : `Location: ${locationUrl}`;
+
+    let msg =
+      `EMERGENCY SOS ALERT!\n\n` +
+      `I need emergency assistance.\n\n` +
+      `Name: ${name}\n` +
+      `Incident ID: ${incidentId}\n` +
+      `Time: ${activationTime}\n`;
+
+    if (emergencyDescription && emergencyDescription.trim()) {
+      msg += `Description: ${emergencyDescription.trim()}\n`;
+    }
+
+    msg += `${locLine}\n\n` + `Please contact me immediately.`;
+
+    return msg;
+  },
+
+  buildResolutionMessage(name: string, incidentId: string, resolutionNote?: string): string {
+    return (
+      `SAFEGUARD UPDATE - RESOLVED\n\n` +
+      `The emergency incident has been resolved safely.\n\n` +
+      `Name: ${name}\n` +
+      `Incident ID: ${incidentId}\n` +
+      `Status: RESOLVED\n` +
+      `Note: ${resolutionNote || 'Situation safely resolved'}\n\n` +
+      `Thank you for your assistance.`
+    );
+  },
+
+  buildCancellationMessage(name: string, incidentId: string, reason?: string): string {
+    return (
+      `SAFEGUARD UPDATE - CANCELLED\n\n` +
+      `The emergency SOS alert has been cancelled.\n\n` +
+      `Name: ${name}\n` +
+      `Incident ID: ${incidentId}\n` +
+      `Status: CANCELLED\n` +
+      `Reason: ${reason || 'False alarm / Accidental activation'}\n\n` +
+      `I am safe and secure.`
+    );
+  },
+
+  async openNativeSMS(phoneNumber: string, message: string): Promise<boolean> {
+    const cleanPhone = phoneNumber.replace(/[^\d+]/g, '');
+    const encodedBody = encodeURIComponent(message);
+    const separator = Platform.OS === 'ios' ? '&' : '?';
+    const smsUrl = `sms:${cleanPhone}${separator}body=${encodedBody}`;
+
+    try {
+      const canOpen = await Linking.canOpenURL(smsUrl);
+      if (canOpen) {
+        await Linking.openURL(smsUrl);
+        return true;
+      }
+      await Linking.openURL(`sms:${cleanPhone}`);
+      return true;
+    } catch (e) {
+      console.warn('[SosDispatchService] SMS app launch note:', e);
+      return false;
+    }
+  },
+
+  async openWhatsApp(phoneNumber: string, message: string): Promise<boolean> {
+    const cleanPhone = phoneNumber.replace(/[^\d]/g, '');
+    const encodedText = encodeURIComponent(message);
+    const appUrl = `whatsapp://send?phone=${cleanPhone}&text=${encodedText}`;
+    const webFallbackUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`;
+
+    try {
+      const canOpen = await Linking.canOpenURL(appUrl);
+      if (canOpen) {
+        await Linking.openURL(appUrl);
+        return true;
+      }
+      await Linking.openURL(webFallbackUrl);
+      return true;
+    } catch (e) {
+      console.warn('[SosDispatchService] WhatsApp launch notice:', e);
+      try {
+        await Linking.openURL(webFallbackUrl);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  },
+};
