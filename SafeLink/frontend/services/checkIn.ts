@@ -27,6 +27,8 @@ class CheckInService {
 
   private async initNotifications() {
     try {
+      if (Platform.OS === 'web') return;
+
       Notifications.setNotificationHandler({
         handleNotification: async () => ({
           shouldShowAlert: true,
@@ -36,19 +38,7 @@ class CheckInService {
           shouldShowList: true,
         }),
       });
-
-      if (Platform.OS === 'android') {
-        await Notifications.setNotificationChannelAsync('safety-check-in', {
-          name: 'Safety Check-In Reminders',
-          importance: Notifications.AndroidImportance.MAX,
-          vibrationPattern: [0, 500, 250, 500],
-          lightColor: '#EF4444',
-          sound: 'default',
-        });
-      }
-    } catch (e) {
-      console.warn('[CheckInService] Notification setup notice:', e);
-    }
+    } catch {}
   }
 
   public subscribe(listener: CheckInListener): () => void {
@@ -101,25 +91,23 @@ class CheckInService {
 
     let notifId: string | undefined = undefined;
     try {
-      const perm = await Notifications.requestPermissionsAsync();
-      if (perm.granted) {
-        notifId = await Notifications.scheduleNotificationAsync({
-          content: {
-            title: '⚠️ SafeLink Safety Check-In Reminder',
-            body: `Your ${durationMinutes}-minute check-in timer has expired. Tap to confirm you are safe!`,
-            data: { type: 'CHECK_IN_EXPIRED' },
-            sound: 'default',
-          },
-          trigger: {
-            type: Notifications.SchedulableTriggerInputTypes.DATE,
-            date: expires,
-            channelId: 'safety-check-in',
-          },
-        });
+      if (Platform.OS !== 'web') {
+        const perm = await Notifications.requestPermissionsAsync().catch(() => ({ granted: false } as any));
+        if (perm && perm.granted) {
+          notifId = await Notifications.scheduleNotificationAsync({
+            content: {
+              title: '⚠️ SafeLink Safety Check-In Reminder',
+              body: `Your ${durationMinutes}-minute check-in timer has expired. Tap to confirm you are safe!`,
+              data: { type: 'CHECK_IN_EXPIRED' },
+            },
+            trigger: {
+              type: Notifications.SchedulableTriggerInputTypes.DATE,
+              date: expires,
+            },
+          }).catch(() => undefined);
+        }
       }
-    } catch (notifErr) {
-      console.warn('[CheckInService] Scheduling local notification notice:', notifErr);
-    }
+    } catch {}
 
     const state: CheckInState = {
       isActive: true,
