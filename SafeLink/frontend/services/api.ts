@@ -54,6 +54,9 @@ const apiClient: AxiosInstance = axios.create({
 // Request Interceptor: Attach Bearer Token automatically & suppress unauthenticated requests to protected endpoints
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
+    // Dynamically ensure the active Metro host IP is used
+    config.baseURL = AppConfig.apiUrl;
+
     // 1. Allow public endpoints without authentication header
     if (isPublicEndpoint(config.url)) {
       return config;

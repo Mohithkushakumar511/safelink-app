@@ -29,31 +29,25 @@ const sanitizeApiUrl = (url?: string): string => {
     return `http://${activeIp}:${SERVER_PORT}`;
   }
   let clean = url.trim();
-  // Ensure no trailing slashes
   while (clean.endsWith('/')) {
     clean = clean.slice(0, -1);
   }
-  // Convert any local https scheme to http for local development
-  if (
-    clean.startsWith('https://localhost') ||
-    clean.startsWith('https://127.0.0.1') ||
-    clean.startsWith('https://10.0.2.2') ||
-    clean.startsWith(`https://${activeIp}`) ||
-    clean.startsWith('https://192.168.')
-  ) {
+
+  // Auto-rewrite any outdated 192.168.x.x, localhost, or 127.0.0.1 to the active host IP
+  clean = clean.replace(/192\.168\.\d+\.\d+/, activeIp);
+  clean = clean.replace('localhost', activeIp).replace('127.0.0.1', activeIp).replace('10.0.2.2', activeIp);
+
+  if (clean.startsWith('https://')) {
     clean = clean.replace('https://', 'http://');
   }
-  // On physical mobile devices, localhost or 127.0.0.1 is unreachable; rewrite to active LAN IP
-  if (Platform.OS !== 'web') {
-    if (clean.includes('localhost') || clean.includes('127.0.0.1')) {
-      clean = clean.replace('localhost', activeIp).replace('127.0.0.1', activeIp);
-    }
-  }
+
   return clean;
 };
 
 export const AppConfig = {
-  apiUrl: sanitizeApiUrl(process.env.EXPO_PUBLIC_API_URL),
+  get apiUrl(): string {
+    return sanitizeApiUrl(process.env.EXPO_PUBLIC_API_URL);
+  },
   mapboxToken: process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || 'pk.eyJ1Ijoic2FmZWxpbmsiLCJhIjoiY200Y3pqbWNmMDA0azJ5a3NqY2Z2N2x2dyJ9.safelink_default',
   storageKeys: {
     token: 'safelink_jwt_token',

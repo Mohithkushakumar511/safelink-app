@@ -34,7 +34,7 @@ export default function LiveLocationScreen() {
       setHasPermission(true);
 
       if (syncBackend && isAuthenticated && !authLoading) {
-        await api.location.update({
+        api.location.update({
           latitude: loc.latitude,
           longitude: loc.longitude,
           accuracy: loc.accuracy || undefined,
@@ -43,12 +43,14 @@ export default function LiveLocationScreen() {
           speed: loc.speed || undefined,
           address: loc.address,
           is_live_sharing: isLiveSharing,
-        });
+        }).catch((e) => console.warn('[LiveLocation] Sync notice:', e));
       }
     } catch (err: any) {
       console.warn('[LiveLocation] Fetch error:', err);
-      setHasPermission(false);
-      Alert.alert('GPS Location', err.message || 'Unable to retrieve location fix.');
+      if (err.message && (err.message.includes('permission') || err.message.includes('Location'))) {
+        setHasPermission(false);
+        Alert.alert('GPS Location', err.message || 'Unable to retrieve location fix.');
+      }
     } finally {
       setIsLoading(false);
     }
