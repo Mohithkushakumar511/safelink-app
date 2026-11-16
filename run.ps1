@@ -4,7 +4,7 @@ Write-Host "========================================================" -Foregroun
 Write-Host ""
 Write-Host "Choose an option to launch:"
 Write-Host "1: Start FastAPI Backend (0.0.0.0:8000)"
-Write-Host "2: Start Expo React Native Frontend (Local Wi-Fi 192.168.1.6)"
+Write-Host "2: Start Expo React Native Frontend (Local Wi-Fi 192.168.91.232)"
 Write-Host "3: Start Expo React Native Frontend (Tunnel Mode)"
 Write-Host "4: Exit"
 Write-Host ""
@@ -19,7 +19,7 @@ switch ($choice) {
     }
     "2" {
         Set-Location "SafeLink\frontend"
-        $env:REACT_NATIVE_PACKAGER_HOSTNAME = "192.168.1.6"
+        $env:REACT_NATIVE_PACKAGER_HOSTNAME = "192.168.91.232"
         npx expo start -c --lan
     }
     "3" {
