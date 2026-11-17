@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
-const CURRENT_LAN_IP = '192.168.91.232';
+const CURRENT_LAN_IP = '10.210.7.232';
 const SERVER_PORT = '8000';
 
 // Dynamically extract the host IP of the machine running Metro bundler
@@ -33,8 +33,8 @@ const sanitizeApiUrl = (url?: string): string => {
     clean = clean.slice(0, -1);
   }
 
-  // Auto-rewrite any outdated 192.168.x.x, localhost, or 127.0.0.1 to the active host IP
-  clean = clean.replace(/192\.168\.\d+\.\d+/, activeIp);
+  // Auto-rewrite any outdated private LAN IP (10.x, 192.168.x, 172.x), localhost, or 127.0.0.1 to the active host IP
+  clean = clean.replace(/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)/, activeIp);
   clean = clean.replace('localhost', activeIp).replace('127.0.0.1', activeIp).replace('10.0.2.2', activeIp);
 
   if (clean.startsWith('https://')) {
