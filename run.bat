@@ -14,6 +14,7 @@ set /p choice=Enter choice (1-4):
 if "%choice%"=="1" (
     echo Starting FastAPI backend on port 8001...
     cd "%~dp0SafeLink\backend"
+    for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8001 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
     python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ) else if "%choice%"=="2" (
     cd "%~dp0SafeLink\frontend"

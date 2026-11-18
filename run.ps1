@@ -14,6 +14,10 @@ $choice = Read-Host "Select (1-4)"
 switch ($choice) {
     "1" {
         Set-Location "SafeLink\backend"
+        $occupied = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
+        if ($occupied) {
+            Stop-Process -Id $occupied.OwningProcess -Force -ErrorAction SilentlyContinue
+        }
         python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
     }
     "2" {
