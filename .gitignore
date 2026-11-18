@@ -37,6 +37,8 @@ SafeLink/backend/uploads/recordings/*
 !SafeLink/backend/uploads/recordings/.gitkeep
 
 # Environment variables
+.env
+*.env
 .env.local
 .env*.local
 
