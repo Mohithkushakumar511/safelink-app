@@ -4,8 +4,6 @@ import {
   View,
   Text,
   TouchableOpacity,
-  ScrollView,
-  RefreshControl,
   ActivityIndicator,
   Alert,
 } from 'react-native';
@@ -16,8 +14,9 @@ import { Card } from '@/components/Card';
 import { Badge } from '@/components/Badge';
 import { Button } from '@/components/Button';
 import { Colors } from '@/constants/colors';
-import { api, formatApiError } from '@/services/api';
+import { api } from '@/services/api';
 import { SosDispatchService } from '@/services/sos';
+import { connectivityService, ConnectivityState } from '@/services/connectivity';
 import { useAuth } from '@/hooks/useAuth';
 
 type FilterType = 'ALL' | 'ACTIVE' | 'RESOLVED' | 'CANCELLED';
@@ -31,6 +30,8 @@ export default function AlertStatusScreen() {
   const [filter, setFilter] = useState<FilterType>('ALL');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [connectivity, setConnectivity] = useState<ConnectivityState>(connectivityService.getState());
+  const [isRefreshingConnectivity, setIsRefreshingConnectivity] = useState(false);
 
   const fetchAlertData = async () => {
     if (!isAuthenticated || authLoading) return;
@@ -61,9 +62,27 @@ export default function AlertStatusScreen() {
     }, [authLoading, isAuthenticated])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      const unsub = connectivityService.subscribe(setConnectivity);
+      return () => unsub();
+    }, [])
+  );
+
   const onRefresh = () => {
     setIsRefreshing(true);
     fetchAlertData();
+    connectivityService.forceCheck().catch(() => {});
+  };
+
+  const handleRefreshConnectivity = async () => {
+    setIsRefreshingConnectivity(true);
+    try {
+      const state = await connectivityService.forceCheck();
+      setConnectivity(state);
+    } catch {} finally {
+      setIsRefreshingConnectivity(false);
+    }
   };
 
   const handleOptionalWhatsApp = async (incident: any) => {
@@ -146,9 +165,173 @@ export default function AlertStatusScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ----------------------------------------------------------------- */}
-      {/* SECTION 1: CURRENT ACTIVE INCIDENT (If any)                       */}
-      {/* ----------------------------------------------------------------- */}
+      {/* Connectivity & Sensor Intelligence Dashboard */}
+      <Card style={styles.connectivityCard}>
+        <View style={styles.connectivityHeader}>
+          <View style={styles.connectivityHeaderLeft}>
+            <View
+              style={[
+                styles.connectivityStatusDot,
+                {
+                  backgroundColor:
+                    connectivity.overallStatus === 'OPTIMAL'
+                      ? Colors.safetyGreen
+                      : connectivity.overallStatus === 'DEGRADED'
+                      ? Colors.warningAmber
+                      : Colors.emergencyRedBright,
+                },
+              ]}
+            />
+            <Text style={styles.connectivityTitle}>CONNECTIVITY INTELLIGENCE</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Badge
+              label={
+                connectivity.overallStatus === 'OPTIMAL'
+                  ? 'OPTIMAL'
+                  : connectivity.overallStatus === 'DEGRADED'
+                  ? 'DEGRADED'
+                  : 'OFFLINE SMS READY'
+              }
+              variant={
+                connectivity.overallStatus === 'OPTIMAL'
+                  ? 'success'
+                  : connectivity.overallStatus === 'DEGRADED'
+                  ? 'warning'
+                  : 'danger'
+              }
+            />
+            <TouchableOpacity
+              onPress={handleRefreshConnectivity}
+              style={styles.refreshIconBtnSmall}
+              disabled={isRefreshingConnectivity}
+              accessibilityLabel="Refresh Connectivity"
+            >
+              {isRefreshingConnectivity ? (
+                <ActivityIndicator size="small" color={Colors.infoBlue} />
+              ) : (
+                <Ionicons name="refresh" size={14} color={Colors.textSecondary} />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* 4-Item Telemetry Matrix */}
+        <View style={styles.connectivityGrid}>
+          {/* 1. Internet Connection */}
+          <View style={styles.connectivityItem}>
+            <View style={styles.connectivityItemHeader}>
+              <Ionicons
+                name={
+                  !connectivity.isConnected
+                    ? 'cloud-offline'
+                    : connectivity.networkType === 'wifi'
+                    ? 'wifi'
+                    : 'cellular'
+                }
+                size={13}
+                color={connectivity.isConnected ? Colors.safetyGreen : Colors.emergencyRedBright}
+              />
+              <Text style={styles.connectivityItemLabel}>INTERNET</Text>
+            </View>
+            <Text style={styles.connectivityItemValue}>
+              {connectivity.isConnected
+                ? connectivity.networkType === 'wifi'
+                  ? 'Connected (Wi-Fi)'
+                  : `Connected (${connectivity.cellularGeneration || 'Cellular'})`
+                : 'Offline'}
+            </Text>
+          </View>
+
+          {/* 2. Backend Cloud */}
+          <View style={styles.connectivityItem}>
+            <View style={styles.connectivityItemHeader}>
+              <Ionicons
+                name="server-outline"
+                size={13}
+                color={
+                  connectivity.backendStatus === 'AVAILABLE'
+                    ? Colors.safetyGreen
+                    : connectivity.backendStatus === 'CHECKING'
+                    ? Colors.infoBlue
+                    : Colors.emergencyRedBright
+                }
+              />
+              <Text style={styles.connectivityItemLabel}>BACKEND</Text>
+            </View>
+            <Text style={styles.connectivityItemValue}>
+              {connectivity.backendStatus === 'AVAILABLE'
+                ? `Available (${connectivity.backendLatencyMs || 25}ms)`
+                : connectivity.backendStatus === 'CHECKING'
+                ? 'Pinging...'
+                : 'Unavailable'}
+            </Text>
+          </View>
+
+          {/* 3. GPS Telemetry */}
+          <View style={styles.connectivityItem}>
+            <View style={styles.connectivityItemHeader}>
+              <Ionicons
+                name="navigate"
+                size={13}
+                color={
+                  connectivity.gpsQuality === 'HIGH'
+                    ? Colors.safetyGreen
+                    : connectivity.gpsQuality === 'FAIR'
+                    ? Colors.warningAmber
+                    : Colors.emergencyRedBright
+                }
+              />
+              <Text style={styles.connectivityItemLabel}>GPS STATUS</Text>
+            </View>
+            <Text style={styles.connectivityItemValue}>
+              {!connectivity.gpsAvailable
+                ? 'GPS Disabled'
+                : !connectivity.gpsPermission
+                ? 'Permission Denied'
+                : connectivity.gpsAccuracyMeters
+                ? `±${Math.round(connectivity.gpsAccuracyMeters)}m (${connectivity.isGpsStale ? 'Cached' : 'Live'})`
+                : 'Acquiring Fix...'}
+            </Text>
+          </View>
+
+          {/* 4. SOS Sync Queue */}
+          <View style={styles.connectivityItem}>
+            <View style={styles.connectivityItemHeader}>
+              <Ionicons
+                name={connectivity.totalPendingCount === 0 ? 'cloud-done-outline' : 'sync-outline'}
+                size={13}
+                color={connectivity.totalPendingCount === 0 ? Colors.safetyGreen : Colors.warningAmber}
+              />
+              <Text style={styles.connectivityItemLabel}>SYNC QUEUE</Text>
+            </View>
+            <Text style={styles.connectivityItemValue}>
+              {connectivity.isSyncing
+                ? 'Syncing...'
+                : connectivity.totalPendingCount > 0
+                ? `${connectivity.totalPendingCount} Pending Sync`
+                : 'All Synced'}
+            </Text>
+          </View>
+        </View>
+
+        {/* Dispatch Route Indicator */}
+        <View style={styles.connectivityFooter}>
+          <Text style={styles.connectivityFooterText}>
+            <Text style={{ color: Colors.textSecondary, fontWeight: '700' }}>Active Route: </Text>
+            {connectivity.backendStatus === 'AVAILABLE'
+              ? 'Direct Cloud API + Cellular SMS Backup'
+              : 'Cellular SMS Direct + Offline Storage Queue (Auto-Sync upon reconnection)'}
+          </Text>
+          {connectivity.lastSuccessfulSync && (
+            <Text style={styles.lastSyncText}>
+              Synced {new Date(connectivity.lastSuccessfulSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+          )}
+        </View>
+      </Card>
+
+      {/* Current Active Incident */}
       {activeIncident ? (
         <Card style={styles.activeIncidentCard}>
           <View style={styles.activeCardHeader}>
@@ -159,7 +342,15 @@ export default function AlertStatusScreen() {
                 Incident #{activeIncident.incident_id || activeIncident.id}
               </Text>
             </View>
-            <Badge label="ACTIVE" variant="danger" />
+            <View style={{ alignItems: 'flex-end', gap: 4 }}>
+              <Badge label="ACTIVE" variant="danger" />
+              {activeIncident.escalation && (
+                <Badge
+                  label={`L${activeIncident.escalation.level} • ${activeIncident.escalation.status === 'ACKNOWLEDGED' ? 'ACKNOWLEDGED' : 'ESCALATING'}`}
+                  variant={activeIncident.escalation.status === 'ACKNOWLEDGED' ? 'success' : 'warning'}
+                />
+              )}
+            </View>
           </View>
 
           {/* Telemetry Grid */}
@@ -255,6 +446,45 @@ export default function AlertStatusScreen() {
               </>
             )}
 
+            {/* Rescue Acknowledgement Status (Feature 3) */}
+            <View style={styles.telemetryDivider} />
+            <View style={{ marginTop: 4 }}>
+              <Text style={styles.telemetryLabel}>RESCUE ACKNOWLEDGEMENT TRACKING</Text>
+              {activeIncident.escalation?.status === 'ACKNOWLEDGED' && activeIncident.escalation?.acknowledged_by ? (
+                <View style={styles.ackSuccessBanner}>
+                  <Ionicons name="shield-checkmark" size={18} color="#10B981" />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={styles.ackSuccessTitle}>
+                      ACCEPTED RESPONSIBILITY: {activeIncident.escalation.acknowledged_by.contact_name}
+                    </Text>
+                    <Text style={styles.ackSuccessSub}>
+                      Contact accepted emergency responsibility. Escalation stopped.
+                    </Text>
+                  </View>
+                </View>
+              ) : activeIncident.escalation?.status === 'EXHAUSTED' ? (
+                <View style={[styles.ackSuccessBanner, { backgroundColor: 'rgba(239, 68, 68, 0.15)', borderColor: '#EF4444' }]}>
+                  <Ionicons name="alert-circle" size={18} color="#EF4444" />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={[styles.ackSuccessTitle, { color: '#EF4444' }]}>ALL CONTACTS ALERTED (NO RESPONSE)</Text>
+                    <Text style={styles.ackSuccessSub}>All escalation levels exhausted. Contacts notified via cellular SMS.</Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={[styles.ackSuccessBanner, { backgroundColor: 'rgba(245, 158, 11, 0.12)', borderColor: '#F59E0B' }]}>
+                  <Ionicons name="hourglass-outline" size={18} color="#F59E0B" />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={[styles.ackSuccessTitle, { color: '#F59E0B' }]}>
+                      WAITING FOR CONTACT ACKNOWLEDGEMENT
+                    </Text>
+                    <Text style={styles.ackSuccessSub}>
+                      Escalation Level {activeIncident.escalation?.level || 1} active. Contact: {activeIncident.primary_contact_name || 'Primary Contact'}.
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </View>
+
             {/* Chronological Incident Timeline (Feature 10) */}
             {activeIncident.timeline && activeIncident.timeline.length > 0 && (
               <View style={{ marginTop: 12, borderTopWidth: 1, borderTopColor: '#2D1B28', paddingTop: 10 }}>
@@ -331,9 +561,7 @@ export default function AlertStatusScreen() {
         </Card>
       )}
 
-      {/* ----------------------------------------------------------------- */}
-      {/* SECTION 2: INCIDENT HISTORY & AUDIT TRAIL                         */}
-      {/* ----------------------------------------------------------------- */}
+      {/* Incident History & Audit Trail */}
       <View style={styles.historySectionHeader}>
         <Text style={styles.sectionHeading}>Emergency Incident Log</Text>
         <Text style={styles.sectionSubHeading}>
@@ -557,6 +785,29 @@ const styles = StyleSheet.create({
   activeActionRow: {
     flexDirection: 'row',
   },
+  ackSuccessBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderWidth: 1,
+    borderColor: '#10B981',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  ackSuccessTitle: {
+    color: '#10B981',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  ackSuccessSub: {
+    color: '#D1D5DB',
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 2,
+  },
   idleStatusCard: {
     padding: 14,
     marginBottom: 16,
@@ -699,5 +950,95 @@ const styles = StyleSheet.create({
     color: Colors.infoBlue,
     fontSize: 10,
     fontWeight: '700',
+  },
+  /* Connectivity Intelligence Card */
+  connectivityCard: {
+    backgroundColor: '#0F1C3F',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 16,
+  },
+  connectivityHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  connectivityHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  connectivityStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  connectivityTitle: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  refreshIconBtnSmall: {
+    padding: 4,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  connectivityGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingTop: 10,
+    gap: 8,
+  },
+  connectivityItem: {
+    width: '48%',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  connectivityItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 4,
+  },
+  connectivityItemLabel: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  connectivityItemValue: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  connectivityFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 10,
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    gap: 8,
+  },
+  connectivityFooterText: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+    flex: 1,
+  },
+  lastSyncText: {
+    color: Colors.infoBlue,
+    fontSize: 11,
+    fontWeight: '600',
   },
 });

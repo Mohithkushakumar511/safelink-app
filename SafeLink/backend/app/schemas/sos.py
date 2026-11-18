@@ -22,6 +22,13 @@ class SOSCreateRequest(BaseModel):
     countdown_seconds: Optional[int] = None
     battery_level: Optional[float] = None
     battery_status: Optional[str] = None
+    offline_incident_id: Optional[str] = None
+    activated_at: Optional[str] = None
+    created_offline: Optional[bool] = False
+    retry_count: Optional[int] = 0
+    connectivity_method: Optional[str] = None
+    offline_synced_at: Optional[str] = None
+    connectivity_status: Optional[str] = None
 
 class MessageStatusUpdatePayload(BaseModel):
     recipient_contact_id: Optional[str] = None
@@ -40,9 +47,69 @@ class VoiceUploadPayload(BaseModel):
 
 class SOSCancelRequest(BaseModel):
     reason: Optional[str] = Field("False alarm / Accidental activation", max_length=200)
+    pin: Optional[str] = None
+    password_bypass: Optional[str] = None
 
 class SOSResolveRequest(BaseModel):
     resolution_note: Optional[str] = Field("Situation safely resolved", max_length=200)
+
+class TimelineEvent(BaseModel):
+    id: str
+    incident_id: Optional[str] = None
+    event: str
+    title: str
+    description: str
+    timestamp: str
+    status: Literal["Pending", "Attempted", "Sent", "Acknowledged", "Failed", "Escalated", "Resolved"] = "Pending"
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy: Optional[float] = None
+    contact_id: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    escalation_level: Optional[int] = None
+    icon: Optional[str] = "alert-circle"
+
+class TimelineEventCreate(BaseModel):
+    id: Optional[str] = None
+    incident_id: Optional[str] = None
+    event: str
+    title: str
+    description: str
+    timestamp: Optional[str] = None
+    status: Optional[Literal["Pending", "Attempted", "Sent", "Acknowledged", "Failed", "Escalated", "Resolved"]] = "Pending"
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    accuracy: Optional[float] = None
+    contact_id: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    escalation_level: Optional[int] = None
+    icon: Optional[str] = None
+
+class TimelineSyncPayload(BaseModel):
+    events: List[TimelineEventCreate]
+
+class ContactAcknowledgementRequest(BaseModel):
+    contact_id: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    token: Optional[str] = None
+    response_status: Literal["ACCEPTED_RESPONSIBILITY", "UNABLE_TO_HELP", "I_AM_RESPONDING", "UNABLE_TO_RESPOND", "ACKNOWLEDGED"] = "ACCEPTED_RESPONSIBILITY"
+    note: Optional[str] = Field(None, max_length=200)
+
+class EscalationStatusResponse(BaseModel):
+    level: int = 1
+    status: Literal["WAITING_ACK", "ACKNOWLEDGED", "EXHAUSTED", "CANCELLED", "RESOLVED", "DISABLED"] = "WAITING_ACK"
+    current_contact_id: Optional[str] = None
+    current_contact_name: Optional[str] = None
+    current_contact_phone: Optional[str] = None
+    attempts: int = 1
+    timeout_seconds: int = 120
+    next_escalation_at: Optional[str] = None
+    seconds_remaining: Optional[int] = None
+    acknowledged_by: Optional[Dict[str, Any]] = None
+    auto_escalation_enabled: bool = True
 
 class SOSIncidentResponse(BaseModel):
     id: str
@@ -73,11 +140,23 @@ class SOSIncidentResponse(BaseModel):
     has_voice_recording: Optional[bool] = False
     battery_level: Optional[float] = None
     battery_status: Optional[str] = None
+    offline_incident_id: Optional[str] = None
+    activated_at: Optional[str] = None
+    created_offline: Optional[bool] = False
+    retry_count: Optional[int] = 0
+    connectivity_method: Optional[str] = None
+    offline_synced_at: Optional[str] = None
+    connectivity_status: Optional[str] = None
     medical_info: Optional[Dict[str, Any]] = None
     recipient_info: Optional[Dict[str, Any]] = None
     timeline: Optional[List[Dict[str, Any]]] = None
+    escalation: Optional[EscalationStatusResponse] = None
     initial_location: Optional[Dict[str, Any]] = None
     latest_location: Optional[Dict[str, Any]] = None
     last_location_update: Optional[str] = None
     location_history: Optional[List[Dict[str, Any]]] = None
     duration_seconds: Optional[int] = None
+    retention_expires_at: Optional[str] = None
+    retention_hours_remaining: Optional[float] = None
+    accepted_rescue: Optional[Dict[str, Any]] = None
+    cancellation_pin_required: Optional[bool] = False

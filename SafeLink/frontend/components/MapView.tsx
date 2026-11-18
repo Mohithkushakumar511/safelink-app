@@ -1,8 +1,7 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, View, Text, Platform, StyleProp, ViewStyle } from 'react-native';
+import { StyleSheet, View, Platform, StyleProp, ViewStyle } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Colors } from '@/constants/colors';
-import { AppConfig } from '@/constants/config';
 
 interface MapViewProps {
   latitude: number;

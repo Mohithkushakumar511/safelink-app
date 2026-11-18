@@ -1,5 +1,4 @@
 import * as Battery from 'expo-battery';
-import { Platform } from 'react-native';
 
 export interface BatterySnapshot {
   level: number; // 0 - 100 percentage
@@ -76,7 +75,7 @@ class BatteryMonitoringService {
   public startListening(onChange: (snapshot: BatterySnapshot) => void): void {
     try {
       this.stopListening();
-      this.listener = Battery.addBatteryLevelListener(async ({ batteryLevel }) => {
+      this.listener = Battery.addBatteryLevelListener(async () => {
         const snap = await this.getBatterySnapshot();
         onChange(snap);
       });

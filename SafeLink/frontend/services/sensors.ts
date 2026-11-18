@@ -1,6 +1,5 @@
 import { Accelerometer } from 'expo-sensors';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
 
 const STORAGE_KEY_SHAKE_ENABLED = 'safelink_shake_to_sos_enabled';
 const STORAGE_KEY_COUNTDOWN_DURATION = 'safelink_sos_countdown_duration';

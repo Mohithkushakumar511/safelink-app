@@ -5,8 +5,6 @@ import {
   Text,
   Modal,
   TouchableOpacity,
-  Animated,
-  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView } from 'expo-camera';
@@ -55,7 +53,6 @@ export const FlashlightSosModal: React.FC<FlashlightSosModalProps> = ({
 
   const patternIndexRef = useRef(0);
   const timeoutRef = useRef<any>(null);
-  const pulseAnim = useRef(new Animated.Value(0)).current;
 
   // Cleanup immediately whenever modal closes
   useEffect(() => {

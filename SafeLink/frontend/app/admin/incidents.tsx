@@ -159,16 +159,42 @@ export default function AdminIncidentsScreen() {
                         User: {item.user_name || 'Mohith'}
                       </Text>
                     </View>
-                    <Badge
-                      label={item.status}
-                      variant={
-                        item.status === 'ACTIVE'
-                          ? 'danger'
-                          : item.status === 'RESOLVED'
-                          ? 'success'
-                          : 'warning'
-                      }
-                    />
+                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                      <Badge
+                        label={item.status}
+                        variant={
+                          item.status === 'ACTIVE'
+                            ? 'danger'
+                            : item.status === 'RESOLVED'
+                            ? 'success'
+                            : 'warning'
+                        }
+                      />
+                      {item.created_offline && (
+                        <Badge label="OFFLINE ORIGIN" variant="warning" />
+                      )}
+                      {item.connectivity_status === 'OFFLINE_SYNCED' && (
+                        <Badge label="CLOUD SYNCED" variant="info" />
+                      )}
+                      {item.escalation && (
+                        <Badge
+                          label={
+                            item.escalation.status === 'ACKNOWLEDGED'
+                              ? `L${item.escalation.level} ACKNOWLEDGED`
+                              : item.escalation.status === 'EXHAUSTED'
+                              ? 'LADDER EXHAUSTED'
+                              : `ESCALATION L${item.escalation.level}`
+                          }
+                          variant={
+                            item.escalation.status === 'ACKNOWLEDGED'
+                              ? 'success'
+                              : item.escalation.status === 'EXHAUSTED'
+                              ? 'warning'
+                              : 'danger'
+                          }
+                        />
+                      )}
+                    </View>
                   </View>
 
                   <Text style={styles.detailsText}>{item.status_details}</Text>
@@ -198,6 +224,124 @@ export default function AdminIncidentsScreen() {
                       zoom={16}
                       style={{ height: 180, marginTop: 8 }}
                     />
+                  </View>
+                )}
+
+                {/* Escalation Telemetry Summary */}
+                {isExpanded && item.escalation && (
+                  <View style={styles.adminEscalationBox}>
+                    <View style={styles.adminSectionHeaderRow}>
+                      <Ionicons name="git-network-outline" size={15} color={Colors.infoBlue} />
+                      <Text style={styles.adminSectionTitle}>ESCALATION STATUS</Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>Current Level:</Text>
+                      <Text style={styles.adminEscalationVal}>Level {item.escalation.level || 1} ({item.escalation.level === 1 ? 'Primary' : item.escalation.level === 2 ? 'Secondary' : 'Tertiary'})</Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>Target Responder:</Text>
+                      <Text style={styles.adminEscalationVal}>{item.escalation.current_contact_name || item.primary_contact_name || 'Emergency Responder'} ({item.escalation.current_contact_phone || item.primary_contact_phone || 'N/A'})</Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>Attempts:</Text>
+                      <Text style={styles.adminEscalationVal}>{item.escalation.attempts || 1} attempt(s)</Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>Status:</Text>
+                      <Text style={[styles.adminEscalationVal, { color: item.escalation.status === 'ACKNOWLEDGED' ? Colors.safetyGreen : Colors.warningAmber }]}>
+                        {item.escalation.status === 'ACKNOWLEDGED'
+                          ? `Acknowledged by ${item.escalation.acknowledged_by?.contact_name || 'Responder'} (${item.escalation.acknowledged_by?.response_status || 'Responding'})`
+                          : item.escalation.status === 'EXHAUSTED'
+                          ? 'Escalation Ladder Exhausted'
+                          : `Waiting for Acknowledgement (${item.escalation.timeout_seconds || 120}s timeout)`}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Connectivity Intelligence Telemetry Box */}
+                {isExpanded && (
+                  <View style={styles.adminEscalationBox}>
+                    <View style={styles.adminSectionHeaderRow}>
+                      <Ionicons name="wifi-outline" size={15} color={Colors.infoBlue} />
+                      <Text style={styles.adminSectionTitle}>CONNECTIVITY & DELIVERY INTELLIGENCE</Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>Dispatch Origin:</Text>
+                      <Text style={[styles.adminEscalationVal, { color: item.created_offline ? Colors.warningAmber : Colors.safetyGreen }]}>
+                        {item.created_offline ? 'Offline Triggered (Direct Cellular SMS)' : 'Direct Cloud API Dispatch'}
+                      </Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>Cloud Sync Status:</Text>
+                      <Text style={styles.adminEscalationVal}>
+                        {item.created_offline
+                          ? item.offline_synced_at
+                            ? `Synchronized at ${new Date(item.offline_synced_at).toLocaleTimeString()}`
+                            : 'Pending Cloud Synchronization'
+                          : 'Immediate Live Connection'}
+                      </Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>Sync Retry Attempts:</Text>
+                      <Text style={styles.adminEscalationVal}>{item.retry_count ? `${item.retry_count} attempt(s)` : '1 attempt (Direct)'}</Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>GPS Accuracy:</Text>
+                      <Text style={styles.adminEscalationVal}>
+                        {item.accuracy ? `±${Math.round(item.accuracy)}m (${item.accuracy <= 25 ? 'High Satellite' : item.accuracy <= 70 ? 'Fair' : 'Poor'})` : 'Standard Location Fix'}
+                      </Text>
+                    </View>
+                    <View style={styles.adminEscalationRow}>
+                      <Text style={styles.adminEscalationLabel}>Delivery Channel:</Text>
+                      <Text style={styles.adminEscalationVal}>
+                        {item.recipient_info?.sending_method || 'SMS'} ({item.recipient_info?.sending_status || 'SUBMITTED'})
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Complete Emergency Event Timeline */}
+                {isExpanded && item.timeline && item.timeline.length > 0 && (
+                  <View style={styles.adminTimelineBox}>
+                    <View style={styles.adminSectionHeaderRow}>
+                      <Ionicons name="time-outline" size={15} color={Colors.infoBlue} />
+                      <Text style={styles.adminSectionTitle}>EMERGENCY EVENT TIMELINE ({item.timeline.length})</Text>
+                    </View>
+                    {item.timeline.map((evt: any, idx: number) => {
+                      const evtStatus = evt.status || 'Pending';
+                      const badgeVariant =
+                        evtStatus === 'Acknowledged' || evtStatus === 'Resolved'
+                          ? 'success'
+                          : evtStatus === 'Escalated'
+                          ? 'warning'
+                          : evtStatus === 'Failed'
+                          ? 'danger'
+                          : evtStatus === 'Sent'
+                          ? 'info'
+                          : 'neutral';
+
+                      return (
+                        <View key={evt.id || idx} style={styles.adminTimelineItem}>
+                          <View style={styles.adminTimelineDot} />
+                          <View style={{ flex: 1, marginLeft: 8 }}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <Text style={styles.adminTimelineTitle}>{evt.title}</Text>
+                              <Badge label={evtStatus} variant={badgeVariant as any} />
+                            </View>
+                            <Text style={styles.adminTimelineTime}>
+                              {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </Text>
+                            <Text style={styles.adminTimelineDesc}>{evt.description}</Text>
+                            {evt.latitude !== undefined && evt.latitude !== null && (
+                              <Text style={styles.adminTimelineCoords}>
+                                Lat: {evt.latitude.toFixed(5)}, Lng: {evt.longitude.toFixed(5)}
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+                      );
+                    })}
                   </View>
                 )}
 
@@ -349,5 +493,86 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: Colors.textMuted,
     letterSpacing: 1,
+  },
+  adminEscalationBox: {
+    backgroundColor: '#0A142D',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#1E356D',
+  },
+  adminSectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 6,
+  },
+  adminSectionTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: Colors.infoBlue,
+    letterSpacing: 0.8,
+  },
+  adminEscalationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 3,
+  },
+  adminEscalationLabel: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    fontWeight: '600',
+  },
+  adminEscalationVal: {
+    fontSize: 11,
+    color: Colors.textPrimary,
+    fontWeight: '700',
+    maxWidth: '65%',
+    textAlign: 'right',
+  },
+  adminTimelineBox: {
+    backgroundColor: '#0A142D',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#1E356D',
+  },
+  adminTimelineItem: {
+    flexDirection: 'row',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#172554',
+  },
+  adminTimelineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.infoBlue,
+    marginTop: 4,
+  },
+  adminTimelineTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  adminTimelineTime: {
+    fontSize: 10,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  adminTimelineDesc: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  adminTimelineCoords: {
+    fontSize: 10,
+    color: '#93C5FD',
+    fontFamily: 'monospace',
+    marginTop: 2,
   },
 });

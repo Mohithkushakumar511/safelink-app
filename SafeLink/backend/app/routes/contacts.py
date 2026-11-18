@@ -2,7 +2,13 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Depends
 from bson import ObjectId
-from app.schemas.contact import ContactCreateRequest, ContactUpdateRequest, ContactResponse
+from app.schemas.contact import (
+    ContactCreateRequest,
+    ContactUpdateRequest,
+    ContactResponse,
+    ContactReorderRequest,
+    EscalationSettingsPayload
+)
 from app.dependencies import get_current_user
 from app.database import db_manager
 
@@ -16,6 +22,7 @@ def format_contact(doc: dict) -> dict:
         "phone": doc["phone"],
         "relationship": doc.get("relationship", "Emergency Responder"),
         "is_default": bool(doc.get("is_default", False)),
+        "priority": int(doc.get("priority", 1)),
         "created_at": doc.get("created_at", datetime.now(timezone.utc).isoformat()),
         "updated_at": doc.get("updated_at"),
     }
@@ -29,16 +36,16 @@ async def create_contact(
     contact_id = str(ObjectId())
     now_str = datetime.now(timezone.utc).isoformat()
 
-    # Check if this is the user's first contact; if so, make default automatically
     existing_count = await db_manager.emergency_contacts.count_documents({"user_id": user_id})
     is_default = payload.is_default or (existing_count == 0)
 
     if is_default:
-        # Clear default flag on existing contacts
         await db_manager.emergency_contacts.update_many(
             {"user_id": user_id},
             {"$set": {"is_default": False}}
         )
+
+    assigned_priority = payload.priority if payload.priority is not None else (existing_count + 1)
 
     contact_doc = {
         "_id": contact_id,
@@ -48,6 +55,7 @@ async def create_contact(
         "phone": payload.phone.strip(),
         "relationship": payload.relationship or "Emergency Responder",
         "is_default": is_default,
+        "priority": assigned_priority,
         "created_at": now_str,
         "updated_at": now_str,
     }
@@ -60,9 +68,51 @@ async def list_contacts(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     contacts = await db_manager.emergency_contacts.find(
         {"user_id": user_id},
-        sort=[("is_default", -1), ("created_at", 1)]
+        sort=[("priority", 1), ("is_default", -1), ("created_at", 1)]
     )
     return [format_contact(c) for c in contacts]
+
+@router.put("/reorder", response_model=List[ContactResponse])
+async def reorder_contacts(
+    payload: ContactReorderRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["id"]
+    now_str = datetime.now(timezone.utc).isoformat()
+
+    for item in payload.orders:
+        await db_manager.emergency_contacts.update_one(
+            {"id": item.id, "user_id": user_id},
+            {"$set": {"priority": item.priority, "updated_at": now_str}}
+        )
+
+    contacts = await db_manager.emergency_contacts.find(
+        {"user_id": user_id},
+        sort=[("priority", 1), ("is_default", -1), ("created_at", 1)]
+    )
+    return [format_contact(c) for c in contacts]
+
+@router.get("/escalation-settings", response_model=EscalationSettingsPayload)
+async def get_escalation_settings(current_user: dict = Depends(get_current_user)):
+    return EscalationSettingsPayload(
+        auto_escalation_enabled=bool(current_user.get("auto_escalation_enabled", True)),
+        escalation_timeout_seconds=int(current_user.get("escalation_timeout_seconds", 120))
+    )
+
+@router.put("/escalation-settings", response_model=EscalationSettingsPayload)
+async def update_escalation_settings(
+    payload: EscalationSettingsPayload,
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["id"]
+    await db_manager.users.update_one(
+        {"id": user_id},
+        {"$set": {
+            "auto_escalation_enabled": payload.auto_escalation_enabled,
+            "escalation_timeout_seconds": payload.escalation_timeout_seconds
+        }}
+    )
+    return payload
 
 @router.get("/default", response_model=Optional[ContactResponse])
 async def get_default_contact(current_user: dict = Depends(get_current_user)):
@@ -105,6 +155,8 @@ async def update_contact(
         updates["phone"] = payload.phone.strip()
     if payload.relationship is not None:
         updates["relationship"] = payload.relationship.strip()
+    if payload.priority is not None:
+        updates["priority"] = payload.priority
     if payload.is_default is True:
         await db_manager.emergency_contacts.update_many(
             {"user_id": user_id},

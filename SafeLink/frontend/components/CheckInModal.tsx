@@ -10,7 +10,6 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { checkInService, CheckInState } from '@/services/checkIn';
-import { Button } from './Button';
 
 interface CheckInModalProps {
   visible: boolean;

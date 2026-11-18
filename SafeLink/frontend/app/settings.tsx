@@ -23,6 +23,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { DirectSmsService } from '@/services/sms';
 import { motionSensorService } from '@/services/sensors';
 import { offlineQueueService } from '@/services/offlineQueue';
+import { MultilingualService, EmergencyLanguage, SUPPORTED_LANGUAGES } from '@/services/multilingual';
+import { api, formatApiError } from '@/services/api';
 
 const NOTIF_PREFS_KEY = 'safelink_notif_prefs';
 
@@ -49,6 +51,19 @@ export default function SettingsScreen() {
   // Offline Queue (Feature 6)
   const [queueStatus, setQueueStatus] = useState({ isOnline: true, pendingCount: 0 });
 
+  // Feature 1: Cancellation PIN State
+  const [cancellationPinSet, setCancellationPinSet] = useState<boolean>(!!user?.cancellation_pin_set);
+  const [isPinModalVisible, setIsPinModalVisible] = useState<boolean>(false);
+  const [newPin, setNewPin] = useState<string>('');
+  const [confirmPin, setConfirmPin] = useState<string>('');
+  const [pinPassword, setPinPassword] = useState<string>('');
+  const [pinError, setPinError] = useState<string>('');
+  const [isPinSaving, setIsPinSaving] = useState<boolean>(false);
+  const [isResetMode, setIsResetMode] = useState<boolean>(false);
+
+  // Feature 2: Multilingual Messaging State
+  const [emergencyLang, setEmergencyLang] = useState<EmergencyLanguage>('en');
+
   // Notification Preferences (Persisted)
   const [soundAlerts, setSoundAlerts] = useState(true);
   const [smsDispatch, setSmsDispatch] = useState(true);
@@ -65,6 +80,8 @@ export default function SettingsScreen() {
     DirectSmsService.checkPermission().then(setHasDirectSms);
     motionSensorService.loadSettings().then(setShakeEnabled);
     motionSensorService.getCountdownDuration().then(setCountdownDuration);
+    MultilingualService.getSelectedLanguage().then(setEmergencyLang);
+    setCancellationPinSet(!!user?.cancellation_pin_set);
 
     const unsubQueue = offlineQueueService.subscribe((pendingCount, isOnline) => {
       setQueueStatus({ pendingCount, isOnline });
@@ -99,6 +116,54 @@ export default function SettingsScreen() {
   const handleManualQueueSync = async () => {
     await offlineQueueService.flushQueue();
     Alert.alert('Queue Synchronized', 'Offline location and incident queue synced with server.');
+  };
+
+  const handleChangeLanguage = async (lang: EmergencyLanguage) => {
+    setEmergencyLang(lang);
+    await MultilingualService.setSelectedLanguage(lang);
+  };
+
+  const handleOpenPinModal = (reset = false) => {
+    setIsResetMode(reset);
+    setNewPin('');
+    setConfirmPin('');
+    setPinPassword('');
+    setPinError('');
+    setIsPinModalVisible(true);
+  };
+
+  const handleSavePin = async () => {
+    setPinError('');
+    if (!newPin.trim() || newPin.length < 4 || newPin.length > 6 || !/^\d+$/.test(newPin)) {
+      setPinError('PIN must be 4 to 6 numeric digits.');
+      return;
+    }
+    if (newPin !== confirmPin) {
+      setPinError('PIN confirmation does not match.');
+      return;
+    }
+
+    setIsPinSaving(true);
+    try {
+      if (isResetMode) {
+        if (!pinPassword.trim()) {
+          setPinError('Account password is required to reset your PIN.');
+          setIsPinSaving(false);
+          return;
+        }
+        await api.users.resetCancellationPin(pinPassword, newPin);
+        Alert.alert('PIN Reset', 'Your SOS Cancellation PIN has been successfully reset.');
+      } else {
+        await api.users.setCancellationPin(newPin, pinPassword || undefined);
+        Alert.alert('PIN Configured', 'Your personal SOS Cancellation PIN has been configured.');
+      }
+      setCancellationPinSet(true);
+      setIsPinModalVisible(false);
+    } catch (err: any) {
+      setPinError(formatApiError(err));
+    } finally {
+      setIsPinSaving(false);
+    }
   };
 
   const saveNotifPref = async (key: string, value: boolean) => {
@@ -165,17 +230,13 @@ export default function SettingsScreen() {
 
   return (
     <ScreenWrapper scrollable activeTab="settings" contentContainerStyle={styles.container}>
-      {/* ------------------------------------------------------------- */}
-      {/* SCREEN HEADER */}
-      {/* ------------------------------------------------------------- */}
+      {/* Screen Header */}
       <View style={styles.screenHeader}>
         <Text style={styles.headerTitle}>Settings & Profile</Text>
         <Text style={styles.headerSub}>Manage your account, medical safeguard info, and preferences</Text>
       </View>
 
-      {/* ------------------------------------------------------------- */}
-      {/* USER PROFILE CARD */}
-      {/* ------------------------------------------------------------- */}
+      {/* User Profile Card */}
       <Card style={styles.card}>
         <View style={styles.profileRow}>
           <View style={[styles.avatarCircle, isAdmin && styles.adminAvatarCircle]}>
@@ -256,6 +317,121 @@ export default function SettingsScreen() {
         </View>
       </Card>
 
+      {/* Emergency QR Identity Card */}
+      <Card style={[styles.card, { borderColor: Colors.infoBlue, borderWidth: 1.2 }]}>
+        <View style={styles.headerRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Ionicons name="qr-code-outline" size={18} color={Colors.infoBlue} />
+            <Text style={styles.cardHeading}>Emergency QR Identity Card</Text>
+          </View>
+          <Badge label="FIRST RESPONDER" variant="info" />
+        </View>
+        <Text style={styles.cardSubText}>
+          Generate a physical emergency QR badge to share vital medical information and emergency contacts with paramedics, doctors, and bystanders.
+        </Text>
+        <Button
+          title="Open QR Identity Card"
+          onPress={() => router.push('/qr-card')}
+          variant="outline"
+          size="sm"
+          style={{ marginTop: 10, borderColor: Colors.infoBlue }}
+          textStyle={{ color: Colors.infoBlue }}
+          leftIcon={<Ionicons name="scan-outline" size={16} color={Colors.infoBlue} />}
+        />
+      </Card>
+
+      {/* Secure SOS Cancellation PIN */}
+      <Card style={styles.card}>
+        <View style={styles.headerRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Ionicons name="key-outline" size={18} color={Colors.warningAmber} />
+            <Text style={styles.cardHeading}>SOS Cancellation Security PIN</Text>
+          </View>
+          <Badge
+            label={cancellationPinSet ? 'PIN CONFIGURED' : 'NOT CONFIGURED'}
+            variant={cancellationPinSet ? 'success' : 'warning'}
+          />
+        </View>
+        <Text style={styles.cardSubText}>
+          Require a 4 to 6-digit PIN before cancelling an active emergency to prevent unauthorized cancellation by assailants or accidental taps.
+        </Text>
+        <View style={{ flexDirection: 'row', marginTop: 10, gap: 8 }}>
+          <Button
+            title={cancellationPinSet ? 'Change PIN' : 'Configure PIN'}
+            onPress={() => handleOpenPinModal(false)}
+            variant="secondary"
+            size="sm"
+            style={{ flex: 1 }}
+            leftIcon={<Ionicons name="lock-closed" size={15} color="#FFFFFF" />}
+          />
+          {cancellationPinSet && (
+            <Button
+              title="Reset PIN"
+              onPress={() => handleOpenPinModal(true)}
+              variant="outline"
+              size="sm"
+              style={{ flex: 1 }}
+              leftIcon={<Ionicons name="refresh" size={15} color={Colors.textSecondary} />}
+            />
+          )}
+        </View>
+      </Card>
+
+      {/* Multilingual Emergency Messaging */}
+      <Card style={styles.card}>
+        <View style={styles.headerRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Ionicons name="language-outline" size={18} color={Colors.emergencyRedBright} />
+            <Text style={styles.cardHeading}>Emergency Message Language</Text>
+          </View>
+          <Badge
+            label={SUPPORTED_LANGUAGES.find((l) => l.code === emergencyLang)?.nativeName || 'English'}
+            variant="danger"
+          />
+        </View>
+        <Text style={styles.cardSubText}>
+          Select the language for SMS alerts sent to emergency contacts during an SOS:
+        </Text>
+
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+          {SUPPORTED_LANGUAGES.map((lang) => {
+            const isSel = emergencyLang === lang.code;
+            return (
+              <TouchableOpacity
+                key={lang.code}
+                onPress={() => handleChangeLanguage(lang.code)}
+                style={[styles.langChip, isSel && styles.langChipActive]}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.langChipNative, isSel && styles.langChipNativeActive]}>
+                  {lang.nativeName}
+                </Text>
+                <Text style={[styles.langChipCode, isSel && styles.langChipCodeActive]}>
+                  {lang.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* Live Template Preview Accordion */}
+        <View style={styles.templatePreviewBox}>
+          <Text style={styles.templatePreviewHeader}>SMS TEMPLATE PREVIEW:</Text>
+          <Text style={styles.templatePreviewText}>
+            {MultilingualService.buildMessage(
+              {
+                name: user?.name || user?.display_name || 'Mohith',
+                incidentId: 'SOS-20261117-SAMPLE',
+                activationTime: '10:30 PM',
+                locationUrl: 'https://maps.google.com/?q=12.9716,77.5946',
+                description: 'Need immediate emergency assistance',
+              },
+              emergencyLang
+            )}
+          </Text>
+        </View>
+      </Card>
+
       
 
       {/* ------------------------------------------------------------- */}
@@ -302,9 +478,7 @@ export default function SettingsScreen() {
       
       )}
 
-      {/* ------------------------------------------------------------- */}
-      {/* NOTIFICATION SETTINGS */}
-      {/* ------------------------------------------------------------- */}
+      {/* Notification Settings */}
       <Card style={styles.card}>
         <View style={styles.headerRow}>
           <Ionicons name="notifications" size={18} color={Colors.infoBlue} />
@@ -355,9 +529,7 @@ export default function SettingsScreen() {
         </View>
       </Card>
 
-      {/* ------------------------------------------------------------- */}
-      {/* EMERGENCY SENSORS & AUTOMATION (Features 1, 2 & 6) */}
-      {/* ------------------------------------------------------------- */}
+      {/* Emergency Sensors & Automation */}
       <Card style={styles.card}>
         <View style={styles.headerRow}>
           <Ionicons name="hardware-chip" size={18} color={Colors.emergencyRedBright} />
@@ -440,9 +612,7 @@ export default function SettingsScreen() {
 
       
 
-      {/* ------------------------------------------------------------- */}
-      {/* DEVICE PERMISSIONS STATUS */}
-      {/* ------------------------------------------------------------- */}
+      {/* Device Permissions Status */}
       <Card style={styles.card}>
         <View style={styles.headerRow}>
           <Ionicons name="lock-closed" size={18} color={Colors.safetyGreen} />
@@ -510,9 +680,7 @@ export default function SettingsScreen() {
 
       
 
-      {/* ------------------------------------------------------------- */}
-      {/* CONNECTION & NETWORK DIAGNOSTICS */}
-      {/* ------------------------------------------------------------- */}
+      {/* Connection & Network Diagnostics */}
       <Card style={styles.card}>
         <View style={styles.headerRow}>
           <Ionicons name="server" size={18} color={Colors.infoBlue} />
@@ -525,11 +693,7 @@ export default function SettingsScreen() {
         </Text>
       </Card>
 
-      
-
-      {/* ------------------------------------------------------------- */}
-      {/* LOGOUT BUTTON */}
-      {/* ------------------------------------------------------------- */}
+      {/* Logout Button */}
       <Button
         title="Sign Out of SafeLink"
         onPress={handleLogout}
@@ -539,9 +703,7 @@ export default function SettingsScreen() {
         leftIcon={<Ionicons name="log-out-outline" size={18} color="#FFFFFF" />}
       />
 
-      {/* ------------------------------------------------------------- */}
-      {/* EDIT PROFILE MODAL */}
-      {/* ------------------------------------------------------------- */}
+      {/* Edit Profile Modal */}
       <Modal visible={isEditModal} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <Card style={styles.modalCard}>
@@ -637,6 +799,81 @@ export default function SettingsScreen() {
           </Card>
 
       
+        </View>
+      </Modal>
+      {/* PIN Configuration & Reset Modal */}
+      <Modal visible={isPinModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <Card style={styles.modalCard}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>
+                {isResetMode
+                  ? 'Reset SOS Cancellation PIN'
+                  : cancellationPinSet
+                  ? 'Update Cancellation PIN'
+                  : 'Set SOS Cancellation PIN'}
+              </Text>
+              <TouchableOpacity onPress={() => setIsPinModalVisible(false)}>
+                <Ionicons name="close" size={24} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={{ fontSize: 13, color: Colors.textSecondary, marginBottom: 14, lineHeight: 18 }}>
+              {isResetMode
+                ? 'Enter your account password to verify identity and configure a new 4 to 6-digit cancellation PIN.'
+                : 'Enter a 4 to 6-digit numeric PIN. This PIN will be required whenever you cancel an active emergency.'}
+            </Text>
+
+            {pinError ? (
+              <View style={styles.errorBanner}>
+                <Ionicons name="alert-circle" size={16} color={Colors.emergencyRedBright} />
+                <Text style={styles.errorBannerText}>{pinError}</Text>
+              </View>
+            ) : null}
+
+            {isResetMode && (
+              <Input
+                label="Account Password (Identity Verification)"
+                placeholder="Enter your account password"
+                secureTextEntry
+                value={pinPassword}
+                onChangeText={setPinPassword}
+                leftIcon={<Ionicons name="lock-closed-outline" size={20} color={Colors.textMuted} />}
+              />
+            )}
+
+            <Input
+              label="New 4-6 Digit Numeric PIN"
+              placeholder="e.g. 1234"
+              keyboardType="number-pad"
+              maxLength={6}
+              secureTextEntry
+              value={newPin}
+              onChangeText={setNewPin}
+              leftIcon={<Ionicons name="key-outline" size={20} color={Colors.textMuted} />}
+            />
+
+            <Input
+              label="Confirm New PIN"
+              placeholder="Re-enter 4-6 digit PIN"
+              keyboardType="number-pad"
+              maxLength={6}
+              secureTextEntry
+              value={confirmPin}
+              onChangeText={setConfirmPin}
+              leftIcon={<Ionicons name="checkmark-circle-outline" size={20} color={Colors.textMuted} />}
+            />
+
+            <Button
+              title={isResetMode ? 'Reset PIN' : 'Save PIN'}
+              onPress={handleSavePin}
+              variant="emergency"
+              size="lg"
+              loading={isPinSaving}
+              style={{ marginTop: 10 }}
+              leftIcon={<Ionicons name="shield-checkmark" size={18} color="#FFFFFF" />}
+            />
+          </Card>
         </View>
       </Modal>
     </ScreenWrapper>
@@ -896,5 +1133,82 @@ const styles = StyleSheet.create({
   countdownChipTextActive: {
     color: '#FFFFFF',
     fontWeight: '800',
+  },
+  cardSubText: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  langChip: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    backgroundColor: '#0A142D',
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#172554',
+  },
+  langChipActive: {
+    borderColor: Colors.emergencyRedBright,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+  },
+  langChipNative: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+  },
+  langChipNativeActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  langChipCode: {
+    fontSize: 10,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  langChipCodeActive: {
+    color: Colors.emergencyRedBright,
+    fontWeight: '700',
+  },
+  templatePreviewBox: {
+    backgroundColor: '#090E20',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#172554',
+    padding: 12,
+    marginTop: 12,
+  },
+  templatePreviewHeader: {
+    color: Colors.warningAmber,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  templatePreviewText: {
+    color: '#E2E8F0',
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: 'monospace',
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: Colors.emergencyRedBright,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+  },
+  errorBannerText: {
+    color: Colors.emergencyRedBright,
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 8,
+    flex: 1,
   },
 });

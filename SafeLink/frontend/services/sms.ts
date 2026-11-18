@@ -1,4 +1,4 @@
-import { Platform, PermissionsAndroid, Alert, NativeModules } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import { SosDispatchService } from './sos';
 
 export interface SmsDispatchResult {
@@ -97,17 +97,17 @@ export const DirectSmsService = {
         return {
           status: 'SUBMITTED',
           method: 'SMS_CLIENT_FALLBACK',
-          details: `Invoked native SMS client with pre-filled distress coordinates for ${cleanPhone}.`,
+          details: `Opened Android default SMS app with pre-filled distress coordinates for ${cleanPhone}.`,
           deliveryConfirmation:
-            'SUBMITTED via Device Messaging Client (Unconfirmed Carrier Transmission)',
+            'SUBMITTED via SMS composer (Carrier transmission pending user dispatch)',
           timestamp: nowIso,
         };
       }
       return {
         status: 'FAILED',
         method: 'SMS_CLIENT_FALLBACK',
-        details: 'Unable to open native SMS client on device.',
-        deliveryConfirmation: 'NOT_AVAILABLE',
+        details: 'Default SMS application could not be opened on device.',
+        deliveryConfirmation: 'SMS_APP_UNAVAILABLE',
         timestamp: nowIso,
       };
     } catch (fallbackErr: any) {
@@ -115,7 +115,7 @@ export const DirectSmsService = {
         status: 'FAILED',
         method: 'SMS_CLIENT_FALLBACK',
         details: fallbackErr?.message || 'Emergency SMS dispatch failed.',
-        deliveryConfirmation: 'FAILED',
+        deliveryConfirmation: 'SMS_APP_FAILED',
         timestamp: nowIso,
       };
     }

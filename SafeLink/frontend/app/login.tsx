@@ -9,7 +9,6 @@ import { Card } from '@/components/Card';
 import { Colors } from '@/constants/colors';
 import { useAuth } from '@/hooks/useAuth';
 import { api, formatApiError } from '@/services/api';
-import { AppConfig } from '@/constants/config';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -18,19 +17,11 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isServerHealthy, setIsServerHealthy] = useState<boolean | null>(null);
-
   useEffect(() => {
     let isMounted = true;
     api.health.check()
-      .then(() => {
+      .catch((err: any) => {
         if (isMounted) {
-          setIsServerHealthy(true);
-        }
-      })
-      .catch((err) => {
-        if (isMounted) {
-          setIsServerHealthy(false);
           setErrorMessage(formatApiError(err));
         }
       });

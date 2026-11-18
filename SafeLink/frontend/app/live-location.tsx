@@ -16,7 +16,7 @@ import { Badge } from '@/components/Badge';
 import { SafeLinkMapView } from '@/components/MapView';
 import { Colors } from '@/constants/colors';
 import { LocationService, LocationData } from '@/services/location';
-import { api, formatApiError } from '@/services/api';
+import { api } from '@/services/api';
 import { useAuth } from '@/hooks/useAuth';
 
 export default function LiveLocationScreen() {

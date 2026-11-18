@@ -1,18 +1,24 @@
 import * as Linking from 'expo-linking';
 import { Platform } from 'react-native';
+import { AppConfig } from '@/constants/config';
 
 export const SosDispatchService = {
   buildEmergencyMessage(
     name: string,
     incidentId: string,
     activationTime: string,
-    locationUrl: string,
+    locationUrl?: string,
     isLastKnown = false,
-    emergencyDescription?: string
+    emergencyDescription?: string,
+    isUnavailable = false
   ): string {
-    const locLine = isLastKnown
+    const locLine = isUnavailable || !locationUrl
+      ? `Location: Location unavailable (Device GPS disabled or unavailable)`
+      : isLastKnown
       ? `Location (Last Known Fix): ${locationUrl}`
       : `Location: ${locationUrl}`;
+
+    const ackUrl = `${AppConfig.apiUrl}/sos/ack/${incidentId}`;
 
     let msg =
       `EMERGENCY SOS ALERT!\n\n` +
@@ -25,7 +31,10 @@ export const SosDispatchService = {
       msg += `Description: ${emergencyDescription.trim()}\n`;
     }
 
-    msg += `${locLine}\n\n` + `Please contact me immediately.`;
+    msg +=
+      `${locLine}\n\n` +
+      `Respond / Acknowledge: ${ackUrl}\n\n` +
+      `Please contact me immediately.`;
 
     return msg;
   },
@@ -61,16 +70,20 @@ export const SosDispatchService = {
     const smsUrl = `sms:${cleanPhone}${separator}body=${encodedBody}`;
 
     try {
-      const canOpen = await Linking.canOpenURL(smsUrl);
-      if (canOpen) {
-        await Linking.openURL(smsUrl);
-        return true;
-      }
-      await Linking.openURL(`sms:${cleanPhone}`);
+      // Try opening directly with sms:phone?body=...
+      // Note: On Android 11+, canOpenURL often returns false due to package visibility,
+      // so we call openURL directly in a try/catch.
+      await Linking.openURL(smsUrl);
       return true;
     } catch (e) {
-      console.warn('[SosDispatchService] SMS app launch note:', e);
-      return false;
+      console.warn('[SosDispatchService] Formatted SMS open notice, attempting plain sms intent:', e);
+      try {
+        await Linking.openURL(`sms:${cleanPhone}`);
+        return true;
+      } catch (err2) {
+        console.warn('[SosDispatchService] SMS app launch failed:', err2);
+        return false;
+      }
     }
   },
 

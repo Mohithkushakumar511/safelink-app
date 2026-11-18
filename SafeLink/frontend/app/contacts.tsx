@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -9,6 +9,7 @@ import {
   Alert,
   ActivityIndicator,
   Linking,
+  Switch,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -32,6 +33,10 @@ export default function ContactsScreen() {
   const [contacts, setContacts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Escalation Ladder state
+  const [autoEscalationEnabled, setAutoEscalationEnabled] = useState(true);
+  const [escalationTimeout, setEscalationTimeout] = useState(120);
+
   // Add / Edit Modal state
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -39,6 +44,7 @@ export default function ContactsScreen() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [relationship, setRelationship] = useState('Family');
+  const [priorityInput, setPriorityInput] = useState('1');
   const [isDefault, setIsDefault] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
 
@@ -55,6 +61,16 @@ export default function ContactsScreen() {
       const data = await api.contacts.list();
       setContacts(data);
       await AsyncStorage.setItem('safelink_cached_contacts', JSON.stringify(data));
+
+      try {
+        const escSettings = await api.contacts.getEscalationSettings();
+        if (escSettings) {
+          setAutoEscalationEnabled(escSettings.auto_escalation_enabled);
+          setEscalationTimeout(escSettings.escalation_timeout_seconds);
+        }
+      } catch (escErr) {
+        console.warn('[Contacts] Escalation settings load notice:', escErr);
+      }
     } catch (e: any) {
       try {
         const cached = await AsyncStorage.getItem('safelink_cached_contacts');
@@ -83,12 +99,69 @@ export default function ContactsScreen() {
     }, [authLoading, isAuthenticated])
   );
 
+  const handleToggleAutoEscalation = async () => {
+    const nextVal = !autoEscalationEnabled;
+    setAutoEscalationEnabled(nextVal);
+    try {
+      await api.contacts.updateEscalationSettings({
+        auto_escalation_enabled: nextVal,
+        escalation_timeout_seconds: escalationTimeout,
+      });
+    } catch {
+      setAutoEscalationEnabled(!nextVal);
+      Alert.alert('Notice', 'Could not update automatic escalation setting.');
+    }
+  };
+
+  const handleSelectTimeout = async (sec: number) => {
+    setEscalationTimeout(sec);
+    try {
+      await api.contacts.updateEscalationSettings({
+        auto_escalation_enabled: autoEscalationEnabled,
+        escalation_timeout_seconds: sec,
+      });
+    } catch {
+      Alert.alert('Notice', 'Could not update acknowledgement timeout.');
+    }
+  };
+
+  const handleMovePriority = async (index: number, direction: 'UP' | 'DOWN') => {
+    const targetIndex = direction === 'UP' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= contacts.length) return;
+
+    const updated = [...contacts];
+    const temp = updated[index];
+    updated[index] = updated[targetIndex];
+    updated[targetIndex] = temp;
+
+    const orders = updated.map((c, idx) => ({
+      id: c.id,
+      priority: idx + 1,
+    }));
+
+    const reorderedWithPriorities = updated.map((c, idx) => ({
+      ...c,
+      priority: idx + 1,
+      is_default: idx === 0,
+    }));
+    setContacts(reorderedWithPriorities);
+    await AsyncStorage.setItem('safelink_cached_contacts', JSON.stringify(reorderedWithPriorities));
+
+    try {
+      await api.contacts.reorder(orders);
+    } catch (err: any) {
+      fetchContacts();
+      Alert.alert('Reorder Notice', formatApiError(err));
+    }
+  };
+
   const openAddModal = () => {
     setIsEditing(false);
     setEditingId(null);
     setName('');
     setPhone('');
     setRelationship('Family');
+    setPriorityInput(String(contacts.length + 1));
     setIsDefault(contacts.length === 0);
     setIsModalVisible(true);
   };
@@ -99,6 +172,7 @@ export default function ContactsScreen() {
     setName(item.name);
     setPhone(item.phone);
     setRelationship(item.relationship || 'Family');
+    setPriorityInput(String(item.priority || 1));
     setIsDefault(item.is_default);
     setIsModalVisible(true);
   };
@@ -111,12 +185,14 @@ export default function ContactsScreen() {
 
     setModalLoading(true);
     try {
+      const parsedPriority = parseInt(priorityInput, 10) || 1;
       if (isEditing && editingId) {
         await api.contacts.update(editingId, {
           name: name.trim(),
           phone: phone.trim(),
           relationship: relationship.trim(),
           is_default: isDefault,
+          priority: parsedPriority,
         });
       } else {
         await api.contacts.create({
@@ -124,6 +200,7 @@ export default function ContactsScreen() {
           phone: phone.trim(),
           relationship: relationship.trim(),
           is_default: isDefault,
+          priority: parsedPriority,
         });
       }
       setIsModalVisible(false);
@@ -202,9 +279,7 @@ export default function ContactsScreen() {
 
   return (
     <ScreenWrapper activeTab="contacts" style={styles.screen}>
-      {/* ------------------------------------------------------------- */}
-      {/* SCREEN HEADER */}
-      {/* ------------------------------------------------------------- */}
+      {/* Screen Header */}
       <View style={styles.screenHeader}>
         <View style={styles.headerTitleGroup}>
           <Text style={styles.headerTitle}>Emergency Contacts</Text>
@@ -234,9 +309,7 @@ export default function ContactsScreen() {
         </View>
       </View>
 
-      {/* ------------------------------------------------------------- */}
-      {/* CONTACTS LIST / EMPTY STATE */}
-      {/* ------------------------------------------------------------- */}
+      {/* Contacts List / Empty State */}
       {isLoading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color={Colors.infoBlue} />
@@ -265,82 +338,180 @@ export default function ContactsScreen() {
           data={contacts}
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 24 }}
-          renderItem={({ item }) => (
-            <Card style={styles.contactCard}>
-              <View style={styles.contactMainRow}>
-                {/* Contact Avatar Circle */}
-                <View style={[styles.avatarCircle, item.is_default && styles.avatarCircleDefault]}>
-                  <Text style={styles.avatarInitial}>
-                    {item.name ? item.name[0].toUpperCase() : 'C'}
+          contentContainerStyle={{ paddingBottom: 32, paddingHorizontal: 16 }}
+          ListHeaderComponent={
+            <Card style={styles.escalationSettingsCard}>
+              <View style={styles.escalationHeaderRow}>
+                <View style={styles.escalationTitleCol}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Ionicons name="git-network-outline" size={18} color={Colors.emergencyRedBright} style={{ marginRight: 6 }} />
+                    <Text style={styles.escalationTitle}>Automatic Escalation Ladder</Text>
+                  </View>
+                  <Text style={styles.escalationSub}>
+                    Auto-alert next contact if no response arrives before timeout
                   </Text>
                 </View>
+                <Switch
+                  value={autoEscalationEnabled}
+                  onValueChange={handleToggleAutoEscalation}
+                  trackColor={{ false: '#1E293B', true: Colors.emergencyRedBright }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
 
-                {/* Info Text */}
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <View style={styles.nameBadgeRow}>
-                    <Text style={styles.contactName} numberOfLines={1}>{item.name}</Text>
-                    {item.is_default && (
-                      <Badge label="DEFAULT RESPONDER" variant="success" style={{ marginLeft: 6 }} />
-                    )}
+              {autoEscalationEnabled && (
+                <View style={styles.timeoutSection}>
+                  <Text style={styles.timeoutLabel}>Acknowledgement Timeout:</Text>
+                  <View style={styles.timeoutPillsRow}>
+                    {[
+                      { sec: 60, label: '60s (1m)' },
+                      { sec: 120, label: '120s (2m)' },
+                      { sec: 180, label: '180s (3m)' },
+                      { sec: 300, label: '300s (5m)' },
+                    ].map((opt) => (
+                      <TouchableOpacity
+                        key={opt.sec}
+                        style={[
+                          styles.timeoutPill,
+                          escalationTimeout === opt.sec && styles.timeoutPillActive,
+                        ]}
+                        onPress={() => handleSelectTimeout(opt.sec)}
+                        activeOpacity={0.7}
+                      >
+                        <Text
+                          style={[
+                            styles.timeoutPillText,
+                            escalationTimeout === opt.sec && styles.timeoutPillTextActive,
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
                   </View>
-                  <Text style={styles.contactPhone}>{item.phone}</Text>
-                  <View style={styles.relBadgeWrap}>
-                    <Ionicons name="heart" size={12} color={Colors.emergencyRedBright} style={{ marginRight: 4 }} />
-                    <Text style={styles.contactRelation}>{item.relationship || 'Emergency Contact'}</Text>
+
+                  <View style={styles.ladderFlowRow}>
+                    <View style={styles.ladderStep}>
+                      <Text style={styles.ladderStepNum}>L1</Text>
+                      <Text style={styles.ladderStepText}>Primary</Text>
+                    </View>
+                    <Ionicons name="arrow-forward" size={14} color={Colors.textMuted} />
+                    <View style={styles.ladderStep}>
+                      <Text style={styles.ladderStepNum}>L2</Text>
+                      <Text style={styles.ladderStepText}>Secondary</Text>
+                    </View>
+                    <Ionicons name="arrow-forward" size={14} color={Colors.textMuted} />
+                    <View style={styles.ladderStep}>
+                      <Text style={styles.ladderStepNum}>L3</Text>
+                      <Text style={styles.ladderStepText}>Tertiary</Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+            </Card>
+          }
+          renderItem={({ item, index }) => {
+            const priorityNum = item.priority || index + 1;
+            const priorityBadgeVariant = priorityNum === 1 ? 'danger' : priorityNum === 2 ? 'warning' : 'info';
+            const priorityLabel = priorityNum === 1 ? 'PRIORITY 1 • PRIMARY' : priorityNum === 2 ? 'PRIORITY 2 • SECONDARY' : `PRIORITY ${priorityNum} • TERTIARY`;
+
+            return (
+              <Card style={styles.contactCard}>
+                {/* Priority & Reorder Bar */}
+                <View style={styles.priorityBarRow}>
+                  <Badge label={priorityLabel} variant={priorityBadgeVariant as any} />
+                  <View style={styles.reorderButtonsGroup}>
+                    <TouchableOpacity
+                      style={[styles.reorderBtn, index === 0 && styles.reorderBtnDisabled]}
+                      disabled={index === 0}
+                      onPress={() => handleMovePriority(index, 'UP')}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="chevron-up" size={16} color={index === 0 ? '#475569' : '#FFFFFF'} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.reorderBtn, index === contacts.length - 1 && styles.reorderBtnDisabled]}
+                      disabled={index === contacts.length - 1}
+                      onPress={() => handleMovePriority(index, 'DOWN')}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="chevron-down" size={16} color={index === contacts.length - 1 ? '#475569' : '#FFFFFF'} />
+                    </TouchableOpacity>
                   </View>
                 </View>
 
-                {/* Quick Call Button */}
-                <TouchableOpacity
-                  style={styles.callCircleBtn}
-                  onPress={() => handleCallContact(item.phone)}
-                  activeOpacity={0.7}
-                  accessibilityLabel={`Call ${item.name}`}
-                >
-                  <Ionicons name="call" size={17} color="#FFFFFF" />
-                </TouchableOpacity>
-              </View>
+                <View style={styles.contactMainRow}>
+                  {/* Contact Avatar Circle */}
+                  <View style={[styles.avatarCircle, item.is_default && styles.avatarCircleDefault]}>
+                    <Text style={styles.avatarInitial}>
+                      {item.name ? item.name[0].toUpperCase() : 'C'}
+                    </Text>
+                  </View>
 
-              {/* Action Pills Row */}
-              <View style={styles.cardActionsRow}>
-                {!item.is_default && (
+                  {/* Info Text */}
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <View style={styles.nameBadgeRow}>
+                      <Text style={styles.contactName} numberOfLines={1}>{item.name}</Text>
+                      {item.is_default && (
+                        <Badge label="DEFAULT" variant="success" style={{ marginLeft: 6 }} />
+                      )}
+                    </View>
+                    <Text style={styles.contactPhone}>{item.phone}</Text>
+                    <View style={styles.relBadgeWrap}>
+                      <Ionicons name="heart" size={12} color={Colors.emergencyRedBright} style={{ marginRight: 4 }} />
+                      <Text style={styles.contactRelation}>{item.relationship || 'Emergency Contact'}</Text>
+                    </View>
+                  </View>
+
+                  {/* Quick Call Button */}
                   <TouchableOpacity
-                    onPress={() => handleSetDefault(item)}
+                    style={styles.callCircleBtn}
+                    onPress={() => handleCallContact(item.phone)}
+                    activeOpacity={0.7}
+                    accessibilityLabel={`Call ${item.name}`}
+                  >
+                    <Ionicons name="call" size={17} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Action Pills Row */}
+                <View style={styles.cardActionsRow}>
+                  {!item.is_default && (
+                    <TouchableOpacity
+                      onPress={() => handleSetDefault(item)}
+                      style={styles.actionPill}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="star-outline" size={13} color={Colors.infoBlue} />
+                      <Text style={styles.actionPillText}>Set Default</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  <TouchableOpacity
+                    onPress={() => openEditModal(item)}
                     style={styles.actionPill}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name="star-outline" size={13} color={Colors.infoBlue} />
-                    <Text style={styles.actionPillText}>Set Default</Text>
+                    <Ionicons name="create-outline" size={13} color={Colors.textSecondary} />
+                    <Text style={styles.actionPillText}>Edit</Text>
                   </TouchableOpacity>
-                )}
 
-                <TouchableOpacity
-                  onPress={() => openEditModal(item)}
-                  style={styles.actionPill}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="create-outline" size={13} color={Colors.textSecondary} />
-                  <Text style={styles.actionPillText}>Edit</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => handleDeleteContact(item)}
-                  style={[styles.actionPill, styles.actionPillDelete]}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="trash-outline" size={13} color={Colors.emergencyRedBright} />
-                  <Text style={[styles.actionPillText, { color: Colors.emergencyRedBright }]}>Delete</Text>
-                </TouchableOpacity>
-              </View>
-            </Card>
-          )}
+                  <TouchableOpacity
+                    onPress={() => handleDeleteContact(item)}
+                    style={[styles.actionPill, styles.actionPillDelete]}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="trash-outline" size={13} color={Colors.emergencyRedBright} />
+                    <Text style={[styles.actionPillText, { color: Colors.emergencyRedBright }]}>Delete</Text>
+                  </TouchableOpacity>
+                </View>
+              </Card>
+            );
+          }}
         />
       )}
 
-      {/* ------------------------------------------------------------- */}
-      {/* ADD / EDIT CONTACT MODAL */}
-      {/* ------------------------------------------------------------- */}
+      {/* Add / Edit Contact Modal */}
       <Modal visible={isModalVisible} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <Card style={styles.modalCard}>
@@ -368,6 +539,15 @@ export default function ContactsScreen() {
               value={phone}
               onChangeText={setPhone}
               leftIcon={<Ionicons name="call-outline" size={20} color={Colors.textMuted} />}
+            />
+
+            <Input
+              label="Escalation Priority (1 = Primary, 2 = Secondary, 3 = Tertiary)"
+              placeholder="1"
+              keyboardType="number-pad"
+              value={priorityInput}
+              onChangeText={setPriorityInput}
+              leftIcon={<Ionicons name="trending-up" size={18} color={Colors.textMuted} />}
             />
 
             {/* Relationship Chips */}
@@ -423,9 +603,7 @@ export default function ContactsScreen() {
         </View>
       </Modal>
 
-      {/* ------------------------------------------------------------- */}
-      {/* DEVICE CONTACTS IMPORT MODAL */}
-      {/* ------------------------------------------------------------- */}
+      {/* Device Contacts Import Modal */}
       <Modal visible={isPickerVisible} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <Card style={styles.devicePickerCard}>
@@ -553,8 +731,131 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   /* Contact Cards */
+  escalationSettingsCard: {
+    marginBottom: 14,
+    padding: 14,
+    backgroundColor: '#0F1E3D',
+    borderColor: '#1E3A8A',
+    borderWidth: 1.5,
+  },
+  escalationHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  escalationTitleCol: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  escalationTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  escalationSub: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  timeoutSection: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#1E293B',
+  },
+  timeoutLabel: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  timeoutPillsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 10,
+  },
+  timeoutPill: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    borderRadius: 6,
+    backgroundColor: '#0D162F',
+    borderWidth: 1,
+    borderColor: '#1E356D',
+    alignItems: 'center',
+  },
+  timeoutPillActive: {
+    backgroundColor: '#DC2626',
+    borderColor: '#EF4444',
+  },
+  timeoutPillText: {
+    color: Colors.textSecondary,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  timeoutPillTextActive: {
+    color: '#FFFFFF',
+  },
+  ladderFlowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    backgroundColor: '#0A1329',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    marginTop: 2,
+  },
+  ladderStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  ladderStepNum: {
+    color: Colors.emergencyRedBright,
+    fontSize: 11,
+    fontWeight: '900',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  ladderStepText: {
+    color: Colors.textSecondary,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  priorityBarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#172554',
+  },
+  reorderButtonsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  reorderBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 5,
+    backgroundColor: '#1E356D',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reorderBtnDisabled: {
+    backgroundColor: '#0F1A34',
+    opacity: 0.5,
+  },
   contactCard: {
-    marginHorizontal: 16,
     marginBottom: 12,
     padding: 14,
     backgroundColor: '#101F42',

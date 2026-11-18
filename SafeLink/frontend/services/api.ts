@@ -1,5 +1,4 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { Platform } from 'react-native';
 import { AppConfig } from '@/constants/config';
 import { SecureTokenStorage, isValidToken } from './secureStore';
 
@@ -37,7 +36,9 @@ export const isPublicEndpoint = (url: string = ''): boolean => {
     cleanUrl === '/auth/register' ||
     cleanUrl.startsWith('/auth/register') ||
     cleanUrl === '/auth/demo-login' ||
-    cleanUrl.startsWith('/auth/demo-login')
+    cleanUrl.startsWith('/auth/demo-login') ||
+    cleanUrl.startsWith('/users/qr/') ||
+    cleanUrl.startsWith('/sos/ack/')
   );
 };
 
@@ -168,6 +169,16 @@ export const api = {
       const res = await apiClient.get('/health', { timeout: 5000 });
       return res.data;
     },
+
+    async ping(timeoutMs = 3500): Promise<{ ok: boolean; latencyMs?: number }> {
+      const start = Date.now();
+      try {
+        await axios.get(`${AppConfig.apiUrl}/health`, { timeout: timeoutMs });
+        return { ok: true, latencyMs: Date.now() - start };
+      } catch {
+        return { ok: false };
+      }
+    },
   },
   // -------------------------------------------------------------------------
   // Authentication APIs
@@ -251,6 +262,43 @@ export const api = {
       await SecureTokenStorage.saveUser(res.data);
       return res.data;
     },
+
+    // 1. Secure SOS Cancellation PIN
+    async setCancellationPin(pin: string, password?: string) {
+      const res = await apiClient.post('/users/cancellation-pin', { pin, password });
+      return res.data;
+    },
+
+    async verifyCancellationPin(pin: string) {
+      const res = await apiClient.post('/users/verify-cancellation-pin', { pin });
+      return res.data;
+    },
+
+    async resetCancellationPin(password: string, new_pin: string) {
+      const res = await apiClient.post('/users/reset-cancellation-pin', { password, new_pin });
+      return res.data;
+    },
+
+    // 4. Emergency QR Identity Card
+    async getQRSettings() {
+      const res = await apiClient.get('/users/qr/settings');
+      return res.data;
+    },
+
+    async updateQRSettings(shared_fields: Record<string, boolean>, emergency_instructions?: string) {
+      const res = await apiClient.post('/users/qr/settings', { shared_fields, emergency_instructions });
+      return res.data;
+    },
+
+    async regenerateQRToken() {
+      const res = await apiClient.post('/users/qr/regenerate');
+      return res.data;
+    },
+
+    async getPublicEmergencyCard(token: string) {
+      const res = await apiClient.get(`/users/qr/${token}`);
+      return res.data;
+    },
   },
 
   // -------------------------------------------------------------------------
@@ -262,13 +310,28 @@ export const api = {
       return res.data;
     },
 
-    async create(data: { name: string; phone: string; relationship?: string; is_default?: boolean }) {
+    async create(data: { name: string; phone: string; relationship?: string; is_default?: boolean; priority?: number }) {
       const res = await apiClient.post('/contacts', data);
       return res.data;
     },
 
-    async update(contactId: string, data: { name?: string; phone?: string; relationship?: string; is_default?: boolean }) {
+    async update(contactId: string, data: { name?: string; phone?: string; relationship?: string; is_default?: boolean; priority?: number }) {
       const res = await apiClient.put(`/contacts/${contactId}`, data);
+      return res.data;
+    },
+
+    async reorder(orders: { id: string; priority: number }[]) {
+      const res = await apiClient.put('/contacts/reorder', { orders });
+      return res.data;
+    },
+
+    async getEscalationSettings() {
+      const res = await apiClient.get('/contacts/escalation-settings');
+      return res.data;
+    },
+
+    async updateEscalationSettings(data: { auto_escalation_enabled: boolean; escalation_timeout_seconds: number }) {
+      const res = await apiClient.put('/contacts/escalation-settings', data);
       return res.data;
     },
 
@@ -328,6 +391,11 @@ export const api = {
       countdown_seconds?: number;
       battery_level?: number;
       battery_status?: string;
+      offline_incident_id?: string;
+      activated_at?: string;
+      created_offline?: boolean;
+      retry_count?: number;
+      connectivity_method?: string;
     }) {
       const res = await apiClient.post('/sos/create', data);
       return res.data;
@@ -398,9 +466,11 @@ export const api = {
       return res.data;
     },
 
-    async cancel(incidentId: string, reason?: string) {
+    async cancel(incidentId: string, reason?: string, pin?: string, passwordBypass?: string) {
       const res = await apiClient.patch(`/sos/${incidentId}/cancel`, {
         reason: reason || 'False alarm / Accidental activation',
+        pin: pin || undefined,
+        password_bypass: passwordBypass || undefined,
       });
       return res.data;
     },
@@ -411,6 +481,78 @@ export const api = {
       });
       return res.data;
     },
+
+    async getTimeline(incidentId: string) {
+      const res = await apiClient.get(`/sos/${incidentId}/timeline`);
+      return res.data;
+    },
+
+    async addTimelineEvent(
+      incidentId: string,
+      event: {
+        id?: string;
+        event: string;
+        title: string;
+        description: string;
+        timestamp?: string;
+        status?: 'Pending' | 'Attempted' | 'Sent' | 'Acknowledged' | 'Failed' | 'Escalated' | 'Resolved';
+        latitude?: number;
+        longitude?: number;
+        accuracy?: number;
+        contact_id?: string;
+        contact_name?: string;
+        contact_phone?: string;
+        escalation_level?: number;
+        icon?: string;
+      }
+    ) {
+      const res = await apiClient.post(`/sos/${incidentId}/timeline`, event);
+      return res.data;
+    },
+
+    async syncTimeline(incidentId: string, events: any[]) {
+      const res = await apiClient.post(`/sos/${incidentId}/timeline/sync`, { events });
+      return res.data;
+    },
+
+    async getEscalation(incidentId: string) {
+      const res = await apiClient.get(`/sos/${incidentId}/escalation`);
+      return res.data;
+    },
+
+    async acknowledge(
+      incidentId: string,
+      data: {
+        contact_id?: string;
+        contact_name?: string;
+        contact_phone?: string;
+        response_status: 'I_AM_RESPONDING' | 'UNABLE_TO_RESPOND' | 'ACKNOWLEDGED';
+        note?: string;
+      }
+    ) {
+      const res = await apiClient.post(`/sos/${incidentId}/acknowledge`, data);
+      return res.data;
+    },
+
+    // 3. Rescue Acknowledgement Public Responder Endpoints
+    async getPublicAck(incidentId: string) {
+      const res = await apiClient.get(`/sos/ack/${incidentId}`);
+      return res.data;
+    },
+
+    async submitPublicAck(
+      incidentId: string,
+      data: {
+        contact_id?: string;
+        contact_name?: string;
+        contact_phone?: string;
+        response_status: 'I_AM_RESPONDING' | 'UNABLE_TO_RESPOND' | 'ACKNOWLEDGED';
+        note?: string;
+      }
+    ) {
+      const res = await apiClient.post(`/sos/ack/${incidentId}`, data);
+      return res.data;
+    },
   },
 
   // -------------------------------------------------------------------------
@@ -419,6 +561,16 @@ export const api = {
   admin: {
     async getDashboard() {
       const res = await apiClient.get('/admin/dashboard');
+      return res.data;
+    },
+
+    // 5. Emergency Response Analytics
+    async getAnalytics(rangeDays?: number | null, statusFilter?: string | null) {
+      const params = new URLSearchParams();
+      if (rangeDays) params.append('range_days', rangeDays.toString());
+      if (statusFilter && statusFilter !== 'ALL') params.append('status_filter', statusFilter);
+      const query = params.toString() ? `?${params.toString()}` : '';
+      const res = await apiClient.get(`/admin/analytics${query}`);
       return res.data;
     },
 
@@ -440,6 +592,11 @@ export const api = {
 
     async getIncident(incidentId: string) {
       const res = await apiClient.get(`/admin/incidents/${incidentId}`);
+      return res.data;
+    },
+
+    async getConnectivityOverview() {
+      const res = await apiClient.get('/admin/connectivity/overview');
       return res.data;
     },
   },

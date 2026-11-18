@@ -11,6 +11,9 @@ import {
   ActivityIndicator,
   Share,
   TextInput,
+  AppState,
+  AppStateStatus,
+  Linking,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,10 +30,11 @@ import { LocationService, LocationData } from '@/services/location';
 import { SosDispatchService } from '@/services/sos';
 import { AudioService, AudioRecordingResult } from '@/services/audio';
 import { DirectSmsService, SmsDispatchResult } from '@/services/sms';
-import { AppConfig } from '@/constants/config';
+import { MultilingualService, EmergencyLanguage, SUPPORTED_LANGUAGES } from '@/services/multilingual';
 import { motionSensorService } from '@/services/sensors';
 import { batteryService, BatterySnapshot } from '@/services/battery';
 import { offlineQueueService } from '@/services/offlineQueue';
+import { connectivityService, ConnectivityState } from '@/services/connectivity';
 import { emergencySirenService } from '@/services/siren';
 import { safeJourneyService, JourneyRecord } from '@/services/journey';
 import { checkInService, CheckInState } from '@/services/checkIn';
@@ -47,7 +51,7 @@ const QUICK_DESCRIPTIONS = [
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { user, logout, isAuthenticated, isLoading: authLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
 
   // Dashboard Data State
   const [currentLoc, setCurrentLoc] = useState<LocationData | null>(null);
@@ -83,15 +87,27 @@ export default function DashboardScreen() {
   // SOS Confirmation Modal State
   const [isConfirmModal, setIsConfirmModal] = useState(false);
   const [countdown, setCountdown] = useState(5);
+  const [isCountdownRunning, setIsCountdownRunning] = useState(false);
   const countdownTimerRef = useRef<any>(null);
 
   // Emergency Description & Voice Recording State (Sections D & E)
   const [emergencyDescription, setEmergencyDescription] = useState('');
+  const [emergencyLang, setEmergencyLang] = useState<EmergencyLanguage>('en');
+  const [isWritingDescription, setIsWritingDescription] = useState(false);
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [audioRecording, setAudioRecording] = useState<AudioRecorder | null>(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const recordingTimerRef = useRef<any>(null);
   const [recordedAudioResult, setRecordedAudioResult] = useState<AudioRecordingResult | null>(null);
+
+  // Active SOS Actions State (Resolve, Cancel, PIN verification)
+  const [isResolving, setIsResolving] = useState<boolean>(false);
+  const [isCancelling, setIsCancelling] = useState<boolean>(false);
+  const [isCancelPinModalVisible, setIsCancelPinModalVisible] = useState<boolean>(false);
+  const [cancelPinInput, setCancelPinInput] = useState<string>('');
+  const [cancelPasswordBypass, setCancelPasswordBypass] = useState<string>('');
+  const [usePasswordBypass, setUsePasswordBypass] = useState<boolean>(false);
+  const [cancelPinError, setCancelPinError] = useState<string>('');
   const [previewSound, setPreviewSound] = useState<AudioPlayer | null>(null);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
 
@@ -100,7 +116,7 @@ export default function DashboardScreen() {
 
   // Additional 10 Features State
   const [batterySnap, setBatterySnap] = useState<BatterySnapshot | null>(null);
-  const [queueStatus, setQueueStatus] = useState({ isOnline: true, pendingCount: 0 });
+  const [connectivity, setConnectivity] = useState<ConnectivityState>(connectivityService.getState());
   const [isSirenPlaying, setIsSirenPlaying] = useState(false);
   const [isFlashlightModal, setIsFlashlightModal] = useState(false);
   const [isCheckInModal, setIsCheckInModal] = useState(false);
@@ -159,6 +175,26 @@ export default function DashboardScreen() {
       anim1.stop();
       anim2.stop();
     };
+  }, []);
+
+  // Monitor AppState to immediately detect when user toggles Location/GPS or returns to SafeLink
+  useEffect(() => {
+    const handleAppStateChange = async (nextState: AppStateStatus) => {
+      if (nextState === 'active') {
+        try {
+          const isGpsOn = await LocationService.isGpsProviderEnabled();
+          if (isGpsOn) {
+            handleRefreshLocation();
+          }
+          await connectivityService.refreshGps();
+        } catch (e) {
+          console.warn('[Dashboard] AppState GPS sync error:', e);
+        }
+      }
+    };
+
+    const sub = AppState.addEventListener('change', handleAppStateChange);
+    return () => sub.remove();
   }, []);
 
   // Fetch Dashboard Data
@@ -233,6 +269,7 @@ export default function DashboardScreen() {
           loadDashboardData();
           handleRefreshLocation();
           batteryService.getBatterySnapshot().then(setBatterySnap);
+          MultilingualService.getSelectedLanguage().then(setEmergencyLang);
         }
       }
 
@@ -242,9 +279,10 @@ export default function DashboardScreen() {
       });
 
       // Feature 6: Offline SOS sync queue listener
-      const unsubQueue = offlineQueueService.subscribe((pendingCount, isOnline) => {
-        setQueueStatus({ pendingCount, isOnline });
-      });
+      const unsubQueue = offlineQueueService.subscribe(() => {});
+
+      // Connectivity Intelligence real-time monitor
+      const unsubConn = connectivityService.subscribe(setConnectivity);
 
       // Feature 7: Emergency Siren state listener
       const unsubSiren = emergencySirenService.subscribe(setIsSirenPlaying);
@@ -258,6 +296,7 @@ export default function DashboardScreen() {
       return () => {
         motionSensorService.stop();
         unsubQueue();
+        unsubConn();
         unsubSiren();
         unsubJourney();
         unsubCheckIn();
@@ -265,7 +304,7 @@ export default function DashboardScreen() {
     }, [authLoading, isAuthenticated])
   );
 
-  // SOS Button Press -> Open Confirmation with Configurable Countdown (Features 1 & 2)
+  // SOS Button Press -> Open Confirmation with Paused State for Message Preparation
   const handlePressSOS = async () => {
     if (isDispatchingRef.current || isDispatching) return;
     const currentActive = activeSOSRef.current || activeSOS;
@@ -286,6 +325,22 @@ export default function DashboardScreen() {
         ]
       );
       return;
+    }
+
+    // 1. Proactively verify foreground location permission
+    const hasPerm = await LocationService.hasPermissions();
+    if (!hasPerm) {
+      await LocationService.requestPermissions(true);
+    }
+
+    // 2. Proactively detect if Android Location Services / GPS is switched OFF
+    const gpsEnabled = await LocationService.isGpsProviderEnabled();
+    if (!gpsEnabled) {
+      const turnedOn = await LocationService.requestEnableLocationServices();
+      if (turnedOn) {
+        handleRefreshLocation();
+        await connectivityService.refreshGps();
+      }
     }
 
     let count = contactsCountRef.current || contactsCount;
@@ -337,16 +392,36 @@ export default function DashboardScreen() {
       return;
     }
 
-    // Configurable 5-10 second countdown (Feature 1)
+    // Modal opens with countdown immediately started
     const configuredSeconds = await motionSensorService.getCountdownDuration();
-    setCountdown(configuredSeconds);
+    const initialDuration = configuredSeconds || 5;
+    setCountdown(initialDuration);
+    setIsWritingDescription(false);
+    setIsRecordingAudio(false);
     setIsConfirmModal(true);
+    startCountdownTimer(initialDuration);
+  };
+
+  const pauseCountdownTimer = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    setIsCountdownRunning(false);
+  };
+
+  const startCountdownTimer = (initialSeconds?: number) => {
     if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    const secs = initialSeconds !== undefined ? initialSeconds : (countdown > 0 ? countdown : 5);
+    setCountdown(secs);
+    setIsCountdownRunning(true);
 
     countdownTimerRef.current = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
           if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+          countdownTimerRef.current = null;
+          setIsCountdownRunning(false);
           executeEmergencyDispatch();
           return 0;
         }
@@ -357,10 +432,8 @@ export default function DashboardScreen() {
 
   // Voice Recording & Playback Handlers (Section E)
   const handleStartVoiceRecording = async () => {
-    // Pause countdown while user records audio
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-    }
+    // Immediately pause countdown while user records audio
+    pauseCountdownTimer();
     const rec = await AudioService.startRecording();
     if (rec) {
       setAudioRecording(rec);
@@ -444,9 +517,12 @@ export default function DashboardScreen() {
       } catch {}
       setPreviewSound(null);
     }
+    pauseCountdownTimer();
+    setIsWritingDescription(false);
     setIsRecordingAudio(false);
     setIsPlayingPreview(false);
     setIsConfirmModal(false);
+    setIsCountdownRunning(false);
     setCountdown(5);
     setEmergencyDescription('');
     setRecordedAudioResult(null);
@@ -455,7 +531,10 @@ export default function DashboardScreen() {
 
   // Execute Emergency Dispatch on Backend
   const executeEmergencyDispatch = async () => {
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    if (isDispatchingRef.current) return;
+    isDispatchingRef.current = true;
+
+    pauseCountdownTimer();
     if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
 
     let voiceResult = recordedAudioResult;
@@ -468,25 +547,26 @@ export default function DashboardScreen() {
     setIsConfirmModal(false);
     setIsDispatching(true);
 
-    let freshLoc = currentLoc;
+    let freshLoc: LocationData | null = currentLoc;
     try {
-      freshLoc = await LocationService.getCurrentLocation();
+      freshLoc = await LocationService.getCurrentLocation(false);
       setCurrentLoc(freshLoc);
     } catch (locErr) {
-      console.warn('[Dashboard SOS] GPS refresh notice:', locErr);
+      console.warn('[Dashboard SOS] Live GPS fetch note:', locErr);
     }
 
+    const isUnavailable = !freshLoc || freshLoc.isUnavailable || (!freshLoc.latitude && !freshLoc.longitude);
     const desc = emergencyDescription.trim();
     const batteryInfo = await batteryService.getBatterySnapshot();
     const countdownSecs = await motionSensorService.getCountdownDuration();
 
     try {
       const res = await api.sos.create({
-        latitude: freshLoc?.latitude || 0,
-        longitude: freshLoc?.longitude || 0,
-        accuracy: freshLoc?.accuracy || undefined,
-        address: freshLoc?.address,
-        custom_note: desc || 'Emergency SOS activated from Mobile Dashboard',
+        latitude: isUnavailable ? 0 : (freshLoc?.latitude || 0),
+        longitude: isUnavailable ? 0 : (freshLoc?.longitude || 0),
+        accuracy: isUnavailable ? undefined : (freshLoc?.accuracy || undefined),
+        address: isUnavailable ? 'Location unavailable (GPS disabled)' : (freshLoc?.address || 'Captured GPS Coordinates'),
+        custom_note: desc || (isUnavailable ? 'Emergency SOS activated (Location unavailable)' : 'Emergency SOS activated from Mobile Dashboard'),
         emergency_description: desc || undefined,
         sending_method: 'SMS',
         voice_base64: voiceResult?.base64Data || undefined,
@@ -500,21 +580,37 @@ export default function DashboardScreen() {
       const contactPhone = res.primary_contact_phone || defaultContactRef.current?.phone || defaultContact?.phone;
       if (contactPhone) {
         const userName = user?.name || user?.display_name || 'SafeLink User';
-        const msg = SosDispatchService.buildEmergencyMessage(
-          userName,
-          res.incident_id || res.id,
-          new Date(res.activated_at || res.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          freshLoc?.googleMapsUrl || res.google_maps_url,
-          !freshLoc,
-          desc || undefined
+        const lang = emergencyLang || (await MultilingualService.getSelectedLanguage());
+        const msg = MultilingualService.buildMessage(
+          {
+            name: userName,
+            incidentId: res.incident_id || res.id,
+            activationTime: new Date(res.activated_at || res.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            locationUrl: isUnavailable ? undefined : (freshLoc?.googleMapsUrl || res.google_maps_url),
+            isUnavailable,
+            description: desc || undefined,
+          },
+          lang
         );
 
-        // Feature 3: Direct SMS sending without blocking per-incident confirmation dialogs
+        // Feature 3: Direct SMS sending via Android default SMS client
         let smsResult: SmsDispatchResult | null = null;
         try {
           smsResult = await DirectSmsService.sendEmergencySms(contactPhone, msg);
         } catch (smsErr) {
           console.warn('[Dashboard SOS] Direct SMS execution notice:', smsErr);
+        }
+
+        if (smsResult && smsResult.status === 'FAILED') {
+          const cleanP = contactPhone.replace(/[^\d+]/g, '');
+          Alert.alert(
+            'SMS Dispatch Fallback',
+            `Could not open default SMS app on your device. Please call your emergency contact directly.`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Call Emergency Contact', onPress: () => Linking.openURL(`tel:${cleanP}`) },
+            ]
+          );
         }
 
         // Save sending attempt and accurate status in backend (Features 3 & 5)
@@ -524,16 +620,33 @@ export default function DashboardScreen() {
             recipient_name: res.primary_contact_name,
             recipient_phone: contactPhone,
             message_content: msg,
-            sending_method: smsResult?.method || 'SMS',
+            sending_method: smsResult?.method || 'SMS_CLIENT_FALLBACK',
             sending_status: smsResult?.status || 'SUBMITTED',
             delivery_confirmation:
               smsResult?.deliveryConfirmation ||
-              'SUBMITTED to Messaging Client (Carrier Confirmation Pending)',
+              'SUBMITTED via SMS composer (Pending carrier dispatch)',
             submitted_at: smsResult?.timestamp || new Date().toISOString(),
           });
         } catch (mErr) {
           console.warn('[Dashboard SOS] Message status logging notice:', mErr);
         }
+
+        // Ask user whether to send via WhatsApp as well (ONLY after SMS, with explicit option)
+        setTimeout(() => {
+          Alert.alert(
+            'Send via WhatsApp as well?',
+            `Emergency SMS has been dispatched to ${res.primary_contact_name || 'your emergency contact'}.\n\nWould you also like to send this alert and your coordinates via WhatsApp?`,
+            [
+              { text: 'No / Skip', style: 'cancel' },
+              {
+                text: 'Send on WhatsApp',
+                onPress: async () => {
+                  await SosDispatchService.openWhatsApp(contactPhone, msg);
+                },
+              },
+            ]
+          );
+        }, 1200);
       }
 
       // Immediately navigate to Live Tracking Console
@@ -542,39 +655,205 @@ export default function DashboardScreen() {
         params: { id: res.incident_id || res.id },
       });
     } catch (err: any) {
-      Alert.alert('Dispatch Notice', formatApiError(err));
+      console.warn('[Dashboard SOS] Backend unreachable, activating Intelligent Offline SOS Delivery:', err?.message);
+
+      const offlineId = `OFFLINE-SOS-${Date.now()}`;
+      const nowIso = new Date().toISOString();
+      const userName = user?.name || user?.display_name || 'SafeLink User';
+      const contactPhone = defaultContactRef.current?.phone || defaultContact?.phone;
+      const gmapsUrl = isUnavailable ? '' : (freshLoc?.googleMapsUrl || `https://maps.google.com/?q=${freshLoc?.latitude || 0},${freshLoc?.longitude || 0}`);
+
+      // 1. Direct Emergency SMS via Cellular Network (Works completely offline!)
+      if (contactPhone) {
+        const lang = emergencyLang || (await MultilingualService.getSelectedLanguage());
+        const offlineMsg = MultilingualService.buildMessage(
+          {
+            name: userName,
+            incidentId: offlineId,
+            activationTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            locationUrl: isUnavailable ? undefined : gmapsUrl,
+            isUnavailable,
+            description: desc || undefined,
+          },
+          lang
+        );
+        let offlineSmsResult: SmsDispatchResult | null = null;
+        try {
+          offlineSmsResult = await DirectSmsService.sendEmergencySms(contactPhone, offlineMsg);
+        } catch (smsErr) {
+          console.warn('[Dashboard SOS] Offline SMS dispatch notice:', smsErr);
+        }
+
+        if (offlineSmsResult && offlineSmsResult.status === 'FAILED') {
+          const cleanP = contactPhone.replace(/[^\d+]/g, '');
+          Alert.alert(
+            'SMS Dispatch Fallback',
+            `Could not open default SMS app on your device. Please call your emergency contact directly.`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Call Emergency Contact', onPress: () => Linking.openURL(`tel:${cleanP}`) },
+            ]
+          );
+        }
+
+        // Ask user whether to send via WhatsApp as well (after offline SMS)
+        setTimeout(() => {
+          Alert.alert(
+            'Send via WhatsApp as well?',
+            `Emergency SMS has been dispatched via cellular network.\n\nWould you also like to send this alert and your coordinates via WhatsApp?`,
+            [
+              { text: 'No / Skip', style: 'cancel' },
+              {
+                text: 'Send on WhatsApp',
+                onPress: async () => {
+                  await SosDispatchService.openWhatsApp(contactPhone, offlineMsg);
+                },
+              },
+            ]
+          );
+        }, 1200);
+      }
+
+      // 2. Persist locally to offline queue with reliable retry engine
+      try {
+        await offlineQueueService.enqueueOfflineIncident({
+          id: offlineId,
+          user_id: user?.id,
+          user_name: userName,
+          user_phone: user?.phone_number,
+          activated_at: nowIso,
+          latitude: isUnavailable ? 0 : (freshLoc?.latitude || 0),
+          longitude: isUnavailable ? 0 : (freshLoc?.longitude || 0),
+          accuracy: isUnavailable ? undefined : (freshLoc?.accuracy || undefined),
+          address: isUnavailable ? 'Location unavailable (GPS disabled)' : (freshLoc?.address || 'Captured GPS Coordinates'),
+          custom_note: desc || (isUnavailable ? 'Emergency SOS activated while offline (Location unavailable)' : 'Emergency SOS activated while offline'),
+          emergency_description: desc || undefined,
+          sending_method: 'SMS',
+          voice_base64: voiceResult?.base64Data || undefined,
+          voice_duration_seconds: voiceResult?.durationSeconds || undefined,
+          countdown_seconds: countdownSecs,
+          battery_level: batteryInfo.level,
+          battery_status: batteryInfo.state,
+        });
+      } catch (qErr) {
+        console.warn('[Dashboard SOS] Offline queue save error:', qErr);
+      }
+
+      // 3. Create active offline emergency in state for continuous monitoring
+      const offlineActive: any = {
+        id: offlineId,
+        incident_id: offlineId,
+        user_id: user?.id || 'offline_user',
+        user_name: userName,
+        user_phone: user?.phone_number,
+        status: 'ACTIVE',
+        status_details: 'Emergency SOS activated in Offline Mode. Cellular SMS dispatched. Cloud sync queued.',
+        activated_at: nowIso,
+        timestamp: nowIso,
+        primary_contact_name: defaultContact?.name || 'Emergency Responder',
+        primary_contact_phone: contactPhone,
+        latitude: isUnavailable ? 0 : (freshLoc?.latitude || 0),
+        longitude: isUnavailable ? 0 : (freshLoc?.longitude || 0),
+        accuracy: isUnavailable ? undefined : freshLoc?.accuracy,
+        address: isUnavailable ? 'Location unavailable' : freshLoc?.address,
+        google_maps_url: gmapsUrl,
+        emergency_message: isUnavailable ? 'Emergency SOS activated (Location unavailable)' : 'Emergency SOS activated while offline.',
+        created_offline: true,
+        connectivity_status: 'OFFLINE_SMS_READY',
+      };
+      setActiveSOS(offlineActive);
+
+      Alert.alert(
+        'Offline SOS Dispatched & Queued',
+        `Emergency SMS has been dispatched via cellular network to your emergency contact (${contactPhone || 'primary contact'}).\n\nYour incident and GPS telemetry are securely saved and will automatically synchronize with SafeLink Cloud the moment internet connectivity returns.`,
+        [
+          {
+            text: 'Open Console',
+            onPress: () => router.push({ pathname: '/sos', params: { id: offlineId } }),
+          },
+        ]
+      );
     } finally {
       setIsDispatching(false);
+      isDispatchingRef.current = false;
       setEmergencyDescription('');
       setRecordedAudioResult(null);
       loadDashboardData();
     }
   };
 
+  // Open Active Incident Tracking Console
+  const handleOpenConsole = () => {
+    if (!activeSOS) {
+      router.push('/sos');
+      return;
+    }
+    const incId = activeSOS.incident_id || activeSOS.id;
+    router.push({
+      pathname: '/sos',
+      params: { id: incId },
+    });
+  };
+
+  // Execute Backend Cancellation (with optional PIN or password bypass)
+  const executeCancellation = async (pin?: string, passwordBypass?: string) => {
+    if (!activeSOS || isCancelling) return;
+    const incId = activeSOS.incident_id || activeSOS.id;
+    setIsCancelling(true);
+    setCancelPinError('');
+    try {
+      const res = await api.sos.cancel(
+        incId,
+        'Cancelled from Mobile Dashboard',
+        pin,
+        passwordBypass
+      );
+      // Sync local offline queue if incident was queued locally
+      await offlineQueueService.cancelOfflineIncident(incId, 'Cancelled from Mobile Dashboard');
+      setActiveSOS(null);
+      activeSOSRef.current = null;
+      setIsCancelPinModalVisible(false);
+      setCancelPinInput('');
+      setCancelPasswordBypass('');
+      setCancelPinError('');
+      await loadDashboardData();
+      Alert.alert(
+        'SOS Cancelled',
+        `Emergency Incident #${res.incident_id || incId} has been successfully cancelled.`
+      );
+    } catch (err: any) {
+      const errMsg = formatApiError(err);
+      setCancelPinError(errMsg);
+      Alert.alert('Cancellation Failed', errMsg);
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   // Cancel Active SOS
   const handleCancelActiveSOS = () => {
-    if (!activeSOS) return;
+    if (!activeSOS || isResolving || isCancelling) return;
+    const incId = activeSOS.incident_id || activeSOS.id;
+
+    // Check if Cancellation PIN is set on user profile or incident requires PIN
+    if (user?.cancellation_pin_set || activeSOS.cancellation_pin_required) {
+      setCancelPinInput('');
+      setCancelPasswordBypass('');
+      setUsePasswordBypass(false);
+      setCancelPinError('');
+      setIsCancelPinModalVisible(true);
+      return;
+    }
+
     Alert.alert(
       'Cancel Emergency Alert',
-      'Are you safe? This will mark the active SOS incident as cancelled.',
+      `Are you safe? This will mark Incident #${incId} as cancelled and stop all active escalation and notifications.`,
       [
         { text: 'Keep Active', style: 'cancel' },
         {
           text: 'Yes, Cancel SOS',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              const res = await api.sos.cancel(
-                activeSOS.incident_id || activeSOS.id,
-                'Cancelled from Mobile Dashboard'
-              );
-              setActiveSOS(null);
-              loadDashboardData();
-              Alert.alert('SOS Cancelled', 'The emergency incident has been successfully cancelled.');
-            } catch (err: any) {
-              Alert.alert('Error', formatApiError(err));
-            }
-          },
+          onPress: () => executeCancellation(),
         },
       ]
     );
@@ -582,25 +861,32 @@ export default function DashboardScreen() {
 
   // Mark Active SOS Resolved
   const handleResolveActiveSOS = () => {
-    if (!activeSOS) return;
+    if (!activeSOS || isResolving || isCancelling) return;
+    const incId = activeSOS.incident_id || activeSOS.id;
     Alert.alert(
       'Resolve Emergency',
-      'Has the emergency situation been resolved safely?',
+      `Has the emergency situation for Incident #${incId} been safely resolved?\n\nThis will stop live escalation tracking and record the resolution in the timeline.`,
       [
         { text: 'Keep Active', style: 'cancel' },
         {
           text: 'Mark Resolved',
           onPress: async () => {
+            setIsResolving(true);
             try {
-              await api.sos.resolve(
-                activeSOS.incident_id || activeSOS.id,
+              const res = await api.sos.resolve(
+                incId,
                 'Situation safely resolved by user'
               );
+              // Also sync offline queue if incident was queued locally
+              await offlineQueueService.resolveOfflineIncident(incId, 'Situation safely resolved by user');
               setActiveSOS(null);
-              loadDashboardData();
-              Alert.alert('Resolved', 'Emergency incident marked as resolved.');
+              activeSOSRef.current = null;
+              await loadDashboardData();
+              Alert.alert('Emergency Resolved', `Incident #${res.incident_id || incId} is now safely resolved.`);
             } catch (err: any) {
-              Alert.alert('Error', formatApiError(err));
+              Alert.alert('Resolution Failed', formatApiError(err));
+            } finally {
+              setIsResolving(false);
             }
           },
         },
@@ -613,9 +899,7 @@ export default function DashboardScreen() {
 
   return (
     <ScreenWrapper scrollable activeTab="home" contentContainerStyle={styles.container}>
-      {/* ------------------------------------------------------------- */}
-      {/* TOP HEADER SECTION */}
-      {/* ------------------------------------------------------------- */}
+      {/* Top Header */}
       <View style={styles.topHeader}>
         {/* Brand & App Name */}
         <View style={styles.brandRow}>
@@ -630,8 +914,17 @@ export default function DashboardScreen() {
           </View>
         </View>
 
-        {/* Right Actions: Notifications & Profile / Admin */}
+        {/* Right Actions: Notifications, QR Card & Profile / Admin */}
         <View style={styles.headerRightActions}>
+          <TouchableOpacity
+            style={styles.headerActionBtn}
+            onPress={() => router.push('/qr-card')}
+            activeOpacity={0.7}
+            accessibilityLabel="Emergency QR Identity Card"
+          >
+            <Ionicons name="qr-code-outline" size={20} color={Colors.infoBlue} />
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={styles.headerActionBtn}
             onPress={() => setIsNotificationsModal(true)}
@@ -677,9 +970,113 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       )}
 
-      {/* Real-time Device Telemetry Strip (Features 2, 5 & 6) */}
-      <View style={styles.telemetryStrip}>
-        <View style={styles.telemetryPill}>
+      {/* Compact Network & Sensor Status Indicator */}
+      <TouchableOpacity
+        style={styles.compactStatusBar}
+        activeOpacity={0.7}
+        onPress={() => router.push('/alert-status')}
+        accessibilityLabel="View Full Connectivity Diagnostics"
+      >
+        <View style={styles.compactStatusLeft}>
+          {/* Internet Indicator */}
+          <View style={styles.compactStatusPill}>
+            <Ionicons
+              name={
+                !connectivity.isConnected
+                  ? 'cloud-offline'
+                  : connectivity.networkType === 'wifi'
+                  ? 'wifi'
+                  : 'cellular'
+              }
+              size={12}
+              color={connectivity.isConnected ? Colors.safetyGreen : Colors.emergencyRedBright}
+            />
+            <Text style={styles.compactStatusPillText}>
+              {connectivity.isConnected
+                ? connectivity.networkType === 'wifi'
+                  ? 'Wi-Fi'
+                  : connectivity.cellularGeneration || 'Mobile'
+                : 'Offline'}
+            </Text>
+          </View>
+
+          {/* GPS Indicator (Interactive - tap to turn ON if disabled) */}
+          <TouchableOpacity
+            style={[
+              styles.compactStatusPill,
+              !connectivity.gpsAvailable && styles.compactWarningPill,
+            ]}
+            onPress={async () => {
+              if (!connectivity.gpsAvailable) {
+                await LocationService.requestEnableLocationServices();
+                await handleRefreshLocation();
+                await connectivityService.forceCheck();
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={!connectivity.gpsAvailable ? 'location-outline' : 'navigate'}
+              size={11}
+              color={
+                !connectivity.gpsAvailable
+                  ? Colors.emergencyRedBright
+                  : connectivity.gpsQuality === 'HIGH'
+                  ? Colors.safetyGreen
+                  : connectivity.gpsQuality === 'FAIR'
+                  ? Colors.warningAmber
+                  : Colors.emergencyRedBright
+              }
+            />
+            <Text
+              style={[
+                styles.compactStatusPillText,
+                !connectivity.gpsAvailable && { color: Colors.emergencyRedBright, fontWeight: '700' },
+              ]}
+            >
+              {!connectivity.gpsAvailable
+                ? 'Turn GPS On'
+                : !connectivity.gpsPermission
+                ? 'No GPS'
+                : connectivity.gpsQuality === 'HIGH'
+                ? 'GPS Ready'
+                : 'GPS Fair'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Backend Unavailable Warning (Prominently alerts if backend is offline) */}
+          {connectivity.backendStatus === 'UNAVAILABLE' ? (
+            <View style={[styles.compactStatusPill, styles.compactWarningPill]}>
+              <Ionicons name="alert-circle" size={12} color={Colors.emergencyRedBright} />
+              <Text style={[styles.compactStatusPillText, { color: Colors.emergencyRedBright, fontWeight: '700' }]}>
+                Backend Offline (Local Queue)
+              </Text>
+            </View>
+          ) : connectivity.backendStatus === 'CHECKING' ? (
+            <View style={styles.compactStatusPill}>
+              <ActivityIndicator size="small" color={Colors.infoBlue} style={{ transform: [{ scale: 0.6 }] }} />
+              <Text style={styles.compactStatusPillText}>Syncing</Text>
+            </View>
+          ) : (
+            <View style={styles.compactStatusPill}>
+              <Ionicons name="cloud-done" size={11} color={Colors.safetyGreen} />
+              <Text style={styles.compactStatusPillText}>Cloud Ready</Text>
+            </View>
+          )}
+
+          {/* Queued Updates Count if any pending */}
+          {connectivity.totalPendingCount > 0 && (
+            <View style={[styles.compactStatusPill, { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
+              <Ionicons name="sync" size={11} color={Colors.warningAmber} />
+              <Text style={[styles.compactStatusPillText, { color: Colors.warningAmber }]}>
+                {connectivity.totalPendingCount} Queued
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Battery & Diagnostics Link */}
+        <View style={styles.compactStatusRight}>
           <Ionicons
             name={
               batterySnap?.state === 'CHARGING'
@@ -688,7 +1085,7 @@ export default function DashboardScreen() {
                 ? 'battery-dead'
                 : 'battery-full'
             }
-            size={13}
+            size={12}
             color={
               (batterySnap?.level || 100) <= 20
                 ? Colors.emergencyRedBright
@@ -697,35 +1094,40 @@ export default function DashboardScreen() {
                 : Colors.safetyGreen
             }
           />
-          <Text style={styles.telemetryPillText}>
+          <Text style={styles.compactBatteryText}>
             {batterySnap?.level !== undefined ? `${batterySnap.level}%` : '100%'}
           </Text>
+          <Ionicons name="chevron-forward" size={12} color={Colors.textMuted} />
         </View>
+      </TouchableOpacity>
 
-        <View style={styles.telemetryPill}>
-          <Ionicons
-            name={queueStatus.isOnline ? 'cloud-done' : 'cloud-offline'}
-            size={13}
-            color={queueStatus.isOnline ? Colors.safetyGreen : Colors.warningAmber}
-          />
-          <Text style={styles.telemetryPillText}>
-            {queueStatus.pendingCount > 0
-              ? `${queueStatus.pendingCount} Queued`
-              : queueStatus.isOnline
-              ? 'Synced'
-              : 'Offline'}
-          </Text>
-        </View>
+      {/* Location Services Disabled Warning Banner */}
+      {!connectivity.gpsAvailable && (
+        <TouchableOpacity
+          style={styles.gpsDisabledBanner}
+          onPress={async () => {
+            await LocationService.requestEnableLocationServices();
+            await handleRefreshLocation();
+            await connectivityService.forceCheck();
+          }}
+          activeOpacity={0.85}
+        >
+          <View style={styles.gpsDisabledIconCircle}>
+            <Ionicons name="location-outline" size={20} color={Colors.emergencyRedBright} />
+          </View>
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text style={styles.gpsDisabledTitle}>LOCATION SERVICES ARE TURNED OFF</Text>
+            <Text style={styles.gpsDisabledSub}>
+              Device GPS is disabled. Tap here to turn ON location so SafeLink can track and broadcast your emergency coordinates.
+            </Text>
+          </View>
+          <View style={styles.turnOnGpsBtn}>
+            <Text style={styles.turnOnGpsText}>TURN ON</Text>
+          </View>
+        </TouchableOpacity>
+      )}
 
-        <View style={styles.telemetryPill}>
-          <Ionicons name="phone-portrait-outline" size={12} color={Colors.infoBlue} />
-          <Text style={styles.telemetryPillText}>Shake SOS</Text>
-        </View>
-      </View>
-
-      {/* ------------------------------------------------------------- */}
-      {/* ACTIVE EMERGENCY BANNER (If SOS is Active) */}
-      {/* ------------------------------------------------------------- */}
+      {/* Active Emergency Banner */}
       {activeSOS && (
         <Card style={styles.activeEmergencyCard}>
           <View style={styles.activeEmergencyHeader}>
@@ -746,23 +1148,27 @@ export default function DashboardScreen() {
           <View style={styles.activeEmergencyActions}>
             <Button
               title="Console"
-              onPress={() => router.push('/sos')}
+              onPress={handleOpenConsole}
               variant="emergency"
               size="sm"
               style={{ flex: 1, marginRight: 6 }}
               leftIcon={<Ionicons name="warning" size={15} color="#FFFFFF" />}
             />
             <Button
-              title="Resolve"
+              title={isResolving ? 'Resolving...' : 'Resolve'}
               onPress={handleResolveActiveSOS}
+              loading={isResolving}
+              disabled={isResolving || isCancelling}
               variant="secondary"
               size="sm"
               style={{ flex: 1, marginRight: 6 }}
               leftIcon={<Ionicons name="checkmark-circle-outline" size={15} color={Colors.safetyGreen} />}
             />
             <Button
-              title="Cancel"
+              title={isCancelling ? 'Cancelling...' : 'Cancel'}
               onPress={handleCancelActiveSOS}
+              loading={isCancelling}
+              disabled={isResolving || isCancelling}
               variant="danger"
               size="sm"
               style={{ flex: 1 }}
@@ -772,9 +1178,7 @@ export default function DashboardScreen() {
         </Card>
       )}
 
-      {/* ------------------------------------------------------------- */}
-      {/* MAIN SECTION: PROMINENT ANIMATED CIRCULAR RED SOS BUTTON */}
-      {/* ------------------------------------------------------------- */}
+      {/* Primary SOS Action Button */}
       <View style={styles.mainSosSection}>
         <View style={styles.sosButtonContainer}>
           {/* Outer Pulsing Glow Rings */}
@@ -829,9 +1233,7 @@ export default function DashboardScreen() {
         </Text>
       </View>
 
-      {/* ------------------------------------------------------------- */}
-      {/* EMERGENCY DEFENSE & SAFETY SUITE (Features 3, 4, 7, 8)        */}
-      {/* ------------------------------------------------------------- */}
+      {/* Emergency Defense & Safety Suite */}
       <View style={styles.defenseSuiteSection}>
         <View style={styles.suiteHeaderRow}>
           <Ionicons name="shield-half" size={15} color={Colors.infoBlue} />
@@ -934,9 +1336,7 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* ------------------------------------------------------------- */}
-      {/* STATUS SECTION (4 Balanced Operational Metric Cards) */}
-      {/* ------------------------------------------------------------- */}
+      {/* System Status & Safeguards */}
       <View style={styles.statusSection}>
         <Text style={styles.sectionHeaderTitle}>SYSTEM STATUS & SAFEGUARDS</Text>
 
@@ -1052,9 +1452,7 @@ export default function DashboardScreen() {
         </Card>
       </View>
 
-      {/* ------------------------------------------------------------- */}
-      {/* SOS CONFIRMATION MODAL WITH COUNTDOWN, TEXT & VOICE (D & E)   */}
-      {/* ------------------------------------------------------------- */}
+      {/* SOS Confirmation Modal */}
       <Modal visible={isConfirmModal} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <Card style={styles.confirmModalCard}>
@@ -1067,12 +1465,85 @@ export default function DashboardScreen() {
               Broadcasting your live GPS position and alert message to your default emergency contact:
             </Text>
 
-            {/* Countdown Display */}
-            <View style={styles.countdownBox}>
-              <Text style={styles.countdownBigNumber}>{countdown}</Text>
-              <Text style={styles.countdownSecLabel}>
-                {countdown > 0 ? 'SECONDS REMAINING' : 'DISPATCHING ALERT'}
-              </Text>
+            {/* Countdown Display - Pauses when user writes description or records audio */}
+            {isRecordingAudio ? (
+              <View style={styles.countdownPausedBanner}>
+                <Ionicons name="pause-circle" size={24} color="#F59E0B" />
+                <View style={{ marginLeft: 10, flex: 1 }}>
+                  <Text style={styles.countdownPausedTitle}>COUNTDOWN PAUSED</Text>
+                  <Text style={styles.countdownPausedSubtitle}>
+                    Recording audio... countdown is stopped until you finish.
+                  </Text>
+                </View>
+              </View>
+            ) : isWritingDescription ? (
+              <View style={styles.countdownPausedBanner}>
+                <Ionicons name="pause-circle" size={24} color="#F59E0B" />
+                <View style={{ marginLeft: 10, flex: 1 }}>
+                  <Text style={styles.countdownPausedTitle}>COUNTDOWN PAUSED</Text>
+                  <Text style={styles.countdownPausedSubtitle}>
+                    Writing description... countdown will resume when finished.
+                  </Text>
+                </View>
+              </View>
+            ) : isCountdownRunning ? (
+              <View style={styles.countdownBox}>
+                <Text style={styles.countdownBigNumber}>{countdown}</Text>
+                <Text style={styles.countdownSecLabel}>
+                  {countdown > 0 ? 'SECONDS REMAINING' : 'DISPATCHING ALERT'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.countdownPausedBanner}>
+                <Ionicons name="pause-circle" size={24} color="#F59E0B" />
+                <View style={{ marginLeft: 10, flex: 1 }}>
+                  <Text style={[styles.countdownPausedTitle, { color: '#F59E0B' }]}>
+                    COUNTDOWN PAUSED
+                  </Text>
+                  <Text style={styles.countdownPausedSubtitle}>
+                    Timer paused at {countdown}s. Tap Resume Countdown or Dispatch Immediately.
+                  </Text>
+                </View>
+              </View>
+            )}
+
+            {/* Multilingual Emergency Template Selector */}
+            <View style={{ marginBottom: 10, width: '100%' }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <Text style={styles.inputLabelText}>Distress Alert Language:</Text>
+                <Badge
+                  label={SUPPORTED_LANGUAGES.find((l) => l.code === emergencyLang)?.nativeName || 'English'}
+                  variant="info"
+                />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                {SUPPORTED_LANGUAGES.map((lang) => {
+                  const isSel = emergencyLang === lang.code;
+                  return (
+                    <TouchableOpacity
+                      key={lang.code}
+                      onPress={async () => {
+                        setEmergencyLang(lang.code);
+                        await MultilingualService.setSelectedLanguage(lang.code);
+                      }}
+                      style={[
+                        styles.langPillModal,
+                        isSel && styles.langPillModalActive,
+                      ]}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={[
+                          styles.langPillModalText,
+                          isSel && styles.langPillModalTextActive,
+                        ]}
+                      >
+                        {lang.nativeName}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
 
             {/* Optional Text Emergency Description (Section D) */}
@@ -1081,11 +1552,19 @@ export default function DashboardScreen() {
                 Describe What Happened (Optional):
               </Text>
               <TextInput
-                style={styles.descTextInput}
+                style={[styles.descTextInput, isWritingDescription && styles.descTextInputActive]}
                 placeholder="e.g. I am being followed, I feel unsafe..."
                 placeholderTextColor={Colors.textMuted}
                 value={emergencyDescription}
-                onChangeText={setEmergencyDescription}
+                onFocus={() => {
+                  setIsWritingDescription(true);
+                  pauseCountdownTimer();
+                }}
+                onChangeText={(text) => {
+                  setEmergencyDescription(text);
+                  setIsWritingDescription(true);
+                  pauseCountdownTimer();
+                }}
                 multiline
                 numberOfLines={2}
                 maxLength={140}
@@ -1095,7 +1574,11 @@ export default function DashboardScreen() {
                 {QUICK_DESCRIPTIONS.map((chip, idx) => (
                   <TouchableOpacity
                     key={idx}
-                    onPress={() => setEmergencyDescription(chip)}
+                    onPress={() => {
+                      setEmergencyDescription(chip);
+                      setIsWritingDescription(false);
+                      pauseCountdownTimer();
+                    }}
                     style={[
                       styles.quickChip,
                       emergencyDescription === chip && styles.quickChipActive,
@@ -1113,6 +1596,20 @@ export default function DashboardScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
+
+              {isWritingDescription && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setIsWritingDescription(false);
+                    startCountdownTimer(countdown > 0 ? countdown : 5);
+                  }}
+                  style={styles.doneWritingBtn}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="checkmark-circle-outline" size={14} color="#10B981" />
+                  <Text style={styles.doneWritingText}>Done writing description (Resume Countdown)</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             {/* Optional Voice Emergency Message (Section E) */}
@@ -1175,15 +1672,45 @@ export default function DashboardScreen() {
             </View>
 
             <View style={styles.confirmModalBtns}>
-              <Button
-                title="DISPATCH SOS NOW"
-                onPress={executeEmergencyDispatch}
-                variant="emergency"
-                size="lg"
-                loading={isDispatching}
-                style={{ marginBottom: 10 }}
-                leftIcon={<Ionicons name="flash" size={18} color="#FFFFFF" />}
-              />
+              {isCountdownRunning ? (
+                <View style={{ marginBottom: 10 }}>
+                  <Button
+                    title="DISPATCH SOS NOW (Skip Timer)"
+                    onPress={executeEmergencyDispatch}
+                    variant="emergency"
+                    size="lg"
+                    loading={isDispatching}
+                    style={{ marginBottom: 8 }}
+                    leftIcon={<Ionicons name="flash" size={18} color="#FFFFFF" />}
+                  />
+                  <Button
+                    title="PAUSE COUNTDOWN"
+                    onPress={pauseCountdownTimer}
+                    variant="outline"
+                    size="md"
+                    leftIcon={<Ionicons name="pause-circle-outline" size={18} color="#F59E0B" />}
+                  />
+                </View>
+              ) : (
+                <View style={{ marginBottom: 10 }}>
+                  <Button
+                    title={`RESUME ${countdown || 5}s SOS COUNTDOWN`}
+                    onPress={() => startCountdownTimer(countdown > 0 ? countdown : 5)}
+                    variant="emergency"
+                    size="lg"
+                    style={{ marginBottom: 8 }}
+                    leftIcon={<Ionicons name="timer-outline" size={18} color="#FFFFFF" />}
+                  />
+                  <Button
+                    title="DISPATCH SOS IMMEDIATELY"
+                    onPress={executeEmergencyDispatch}
+                    variant="outline"
+                    size="md"
+                    loading={isDispatching}
+                    leftIcon={<Ionicons name="flash" size={16} color={Colors.emergencyRedBright} />}
+                  />
+                </View>
+              )}
               <Button
                 title="CANCEL (Accidental Press)"
                 onPress={handleCancelCountdown}
@@ -1196,9 +1723,118 @@ export default function DashboardScreen() {
         </View>
       </Modal>
 
-      {/* ------------------------------------------------------------- */}
-      {/* NOTIFICATIONS & ACTIVITY MODAL */}
-      {/* ------------------------------------------------------------- */}
+      {/* Secure SOS Cancellation PIN Modal */}
+      <Modal visible={isCancelPinModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <Card style={styles.confirmModalCard}>
+            <View style={styles.confirmModalIconCircle}>
+              <Ionicons name="shield-checkmark" size={32} color={Colors.emergencyRedBright} />
+            </View>
+
+            <Text style={styles.confirmModalTitle}>SECURE SOS CANCELLATION</Text>
+            <Text style={styles.confirmModalSub}>
+              {usePasswordBypass
+                ? 'Enter your account password to verify and cancel this active emergency incident:'
+                : 'Enter your 4–6 digit Emergency Cancellation PIN to stop the active emergency workflow:'}
+            </Text>
+
+            {cancelPinError ? (
+              <View style={styles.cancelPinErrorBanner}>
+                <Ionicons name="alert-circle" size={16} color={Colors.emergencyRedBright} />
+                <Text style={styles.cancelPinErrorText}>{cancelPinError}</Text>
+              </View>
+            ) : null}
+
+            {!usePasswordBypass ? (
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabelText}>Cancellation PIN (4–6 Digits):</Text>
+                <TextInput
+                  style={styles.pinTextInput}
+                  value={cancelPinInput}
+                  onChangeText={(val) => {
+                    setCancelPinInput(val.replace(/\D/g, '').slice(0, 6));
+                    setCancelPinError('');
+                  }}
+                  placeholder="• • • •"
+                  placeholderTextColor={Colors.textMuted}
+                  keyboardType="numeric"
+                  secureTextEntry
+                  maxLength={6}
+                  autoFocus
+                />
+              </View>
+            ) : (
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabelText}>Account Password:</Text>
+                <TextInput
+                  style={styles.pinTextInput}
+                  value={cancelPasswordBypass}
+                  onChangeText={(val) => {
+                    setCancelPasswordBypass(val);
+                    setCancelPinError('');
+                  }}
+                  placeholder="Enter account password"
+                  placeholderTextColor={Colors.textMuted}
+                  secureTextEntry
+                  autoFocus
+                />
+              </View>
+            )}
+
+            <TouchableOpacity
+              onPress={() => {
+                setUsePasswordBypass(!usePasswordBypass);
+                setCancelPinError('');
+              }}
+              style={styles.forgotPinLink}
+            >
+              <Text style={styles.forgotPinText}>
+                {usePasswordBypass ? '← Use Cancellation PIN instead' : 'Forgot PIN? Verify with Password'}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={{ flexDirection: 'row', marginTop: 16 }}>
+              <Button
+                title="Keep Active"
+                onPress={() => {
+                  setIsCancelPinModalVisible(false);
+                  setCancelPinInput('');
+                  setCancelPasswordBypass('');
+                  setCancelPinError('');
+                }}
+                variant="outline"
+                size="md"
+                style={{ flex: 1, marginRight: 8 }}
+              />
+              <Button
+                title={isCancelling ? 'Verifying...' : 'Confirm Cancel'}
+                onPress={() => {
+                  if (usePasswordBypass) {
+                    if (!cancelPasswordBypass) {
+                      setCancelPinError('Please enter your account password.');
+                      return;
+                    }
+                    executeCancellation(undefined, cancelPasswordBypass);
+                  } else {
+                    if (!cancelPinInput || cancelPinInput.length < 4) {
+                      setCancelPinError('Please enter your 4–6 digit PIN.');
+                      return;
+                    }
+                    executeCancellation(cancelPinInput, undefined);
+                  }
+                }}
+                loading={isCancelling}
+                disabled={isCancelling}
+                variant="danger"
+                size="md"
+                style={{ flex: 1 }}
+              />
+            </View>
+          </Card>
+        </View>
+      </Modal>
+
+      {/* Notifications & Activity Modal */}
       <Modal visible={isNotificationsModal} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <Card style={styles.notifModalCard}>
@@ -1566,16 +2202,16 @@ const styles = StyleSheet.create({
   mainSosSection: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 18,
-    marginBottom: 8,
+    paddingVertical: 8,
+    marginBottom: 4,
   },
   sosButtonContainer: {
-    width: 230,
-    height: 230,
+    width: 220,
+    height: 220,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    marginVertical: 10,
+    marginVertical: 6,
   },
   pulseGlowRing: {
     position: 'absolute',
@@ -1821,6 +2457,53 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 1,
   },
+  countdownPausedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.16)',
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 16,
+    width: '100%',
+  },
+  countdownPausedTitle: {
+    color: '#F59E0B',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  countdownPausedSubtitle: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 2,
+    opacity: 0.9,
+  },
+  descTextInputActive: {
+    borderColor: '#3B82F6',
+    backgroundColor: '#070D1E',
+  },
+  doneWritingBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: '#10B981',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginTop: 6,
+  },
+  doneWritingText: {
+    color: '#10B981',
+    fontSize: 11,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
   confirmModalBtns: {
     width: '100%',
   },
@@ -2027,5 +2710,165 @@ const styles = StyleSheet.create({
   },
   trashRecordButton: {
     padding: 6,
+  },
+  /* Compact Network & Sensor Status Indicator */
+  compactStatusBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#0F1C3F',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 12,
+  },
+  compactStatusLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+    flex: 1,
+  },
+  compactStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  compactWarningPill: {
+    backgroundColor: 'rgba(220, 38, 38, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(220, 38, 38, 0.3)',
+  },
+  compactStatusPillText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  compactStatusRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginLeft: 6,
+  },
+  compactBatteryText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  pinTextInput: {
+    backgroundColor: '#070D1E',
+    borderWidth: 1,
+    borderColor: '#3B82F6',
+    borderRadius: 8,
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '700',
+    textAlign: 'center',
+    paddingVertical: 12,
+    letterSpacing: 4,
+    marginTop: 6,
+  },
+  cancelPinErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 12,
+    width: '100%',
+  },
+  cancelPinErrorText: {
+    color: Colors.emergencyRedBright,
+    fontSize: 12,
+    marginLeft: 6,
+    flex: 1,
+  },
+  forgotPinLink: {
+    marginTop: 10,
+    paddingVertical: 6,
+    alignItems: 'center',
+  },
+  forgotPinText: {
+    color: '#60A5FA',
+    fontSize: 12,
+    textDecorationLine: 'underline',
+  },
+  /* GPS Disabled Banner */
+  gpsDisabledBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.16)',
+    borderWidth: 1.5,
+    borderColor: Colors.emergencyRedBright,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  gpsDisabledIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(239, 68, 68, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gpsDisabledTitle: {
+    color: Colors.emergencyRedBright,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  gpsDisabledSub: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 2,
+    opacity: 0.9,
+  },
+  turnOnGpsBtn: {
+    backgroundColor: Colors.emergencyRedBright,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  turnOnGpsText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  langPillModal: {
+    flex: 1,
+    paddingVertical: 7,
+    paddingHorizontal: 4,
+    backgroundColor: '#0F1C3F',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#1E356D',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  langPillModalActive: {
+    borderColor: Colors.emergencyRedBright,
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+  },
+  langPillModalText: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  langPillModalTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '900',
   },
 });

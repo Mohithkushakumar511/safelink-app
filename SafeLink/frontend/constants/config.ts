@@ -1,8 +1,21 @@
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
 
-const CURRENT_LAN_IP = '10.210.7.232';
+const CURRENT_LAN_IP = '192.168.1.6';
 const SERVER_PORT = '8000';
+
+// Exclude known virtual machine, tunnel, and link-local subnets (VMware, VirtualBox, WSL, APIPA)
+const isVirtualOrInvalidIp = (ip?: string): boolean => {
+  if (!ip) return true;
+  return (
+    ip === 'localhost' ||
+    ip === '127.0.0.1' ||
+    ip === '10.0.2.2' ||
+    ip.startsWith('192.168.189.') || // VMware VMnet1
+    ip.startsWith('192.168.79.') ||  // VMware VMnet8
+    ip.startsWith('192.168.56.') ||  // VirtualBox Host-Only
+    ip.startsWith('169.254.')        // Link-local / APIPA
+  );
+};
 
 // Dynamically extract the host IP of the machine running Metro bundler
 const getMetroHostIp = (): string => {
@@ -12,9 +25,14 @@ const getMetroHostIp = (): string => {
       (Constants as any).manifest2?.extra?.expoClient?.hostUri ||
       (Constants as any).manifest?.debuggerHost;
     if (hostUri && typeof hostUri === 'string') {
-      const ip = hostUri.split(':')[0];
-      if (ip && ip !== 'localhost' && ip !== '127.0.0.1') {
-        return ip;
+      const host = hostUri.split(':')[0];
+      // Only accept if it's a valid IPv4 address and NOT a virtual/tunnel adapter
+      if (
+        host &&
+        /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) &&
+        !isVirtualOrInvalidIp(host)
+      ) {
+        return host;
       }
     }
   } catch {}
@@ -25,20 +43,36 @@ export const DEFAULT_API_URL = `http://${getMetroHostIp()}:${SERVER_PORT}`;
 
 const sanitizeApiUrl = (url?: string): string => {
   const activeIp = getMetroHostIp();
+
+  // If a production cloud domain (https) is explicitly provided, preserve it
+  if (url && url.startsWith('https://')) {
+    let clean = url.trim();
+    while (clean.endsWith('/')) clean = clean.slice(0, -1);
+    return clean;
+  }
+
+  // In local development on device, ALWAYS dynamically target the active Metro host IP on port 8000
+  // This ensures changing Wi-Fi networks (home, college, mobile hotspot) never breaks the connection
+  if (activeIp && !isVirtualOrInvalidIp(activeIp)) {
+    return `http://${activeIp}:${SERVER_PORT}`;
+  }
+
   if (!url || !url.trim()) {
     return `http://${activeIp}:${SERVER_PORT}`;
   }
+
   let clean = url.trim();
   while (clean.endsWith('/')) {
     clean = clean.slice(0, -1);
   }
 
-  // Auto-rewrite any outdated private LAN IP (10.x, 192.168.x, 172.x), localhost, or 127.0.0.1 to the active host IP
-  clean = clean.replace(/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)/, activeIp);
+  // Replace localhost or emulator addresses with the active LAN IP
   clean = clean.replace('localhost', activeIp).replace('127.0.0.1', activeIp).replace('10.0.2.2', activeIp);
 
-  if (clean.startsWith('https://')) {
-    clean = clean.replace('https://', 'http://');
+  // If clean points to a virtual VMware/VirtualBox/APIPA IP, rewrite it to activeIp
+  const hostPart = clean.replace(/^https?:\/\//, '').split(':')[0];
+  if (isVirtualOrInvalidIp(hostPart)) {
+    clean = clean.replace(hostPart, activeIp);
   }
 
   return clean;

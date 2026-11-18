@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status, Depends
 from bson import ObjectId
@@ -13,6 +12,15 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 def format_user_profile(doc: dict) -> dict:
     u_id = str(doc.get("id") or doc.get("_id"))
+    default_shared_fields = {
+        "share_name": True,
+        "share_phone": True,
+        "share_blood_type": True,
+        "share_allergies": True,
+        "share_medical_notes": True,
+        "share_contacts": True,
+        "share_instructions": True,
+    }
     return {
         "id": u_id,
         "email": doc["email"],
@@ -27,6 +35,13 @@ def format_user_profile(doc: dict) -> dict:
         "existing_conditions": doc.get("existing_conditions"),
         "medications": doc.get("medications"),
         "share_medical_with_sos": doc.get("share_medical_with_sos", False),
+        "auto_escalation_enabled": doc.get("auto_escalation_enabled", True),
+        "escalation_timeout_seconds": doc.get("escalation_timeout_seconds", 120),
+        "cancellation_pin_set": bool(doc.get("cancellation_pin_hash")),
+        "qr_token": doc.get("qr_token"),
+        "qr_shared_fields": doc.get("qr_shared_fields") or default_shared_fields,
+        "language_preference": doc.get("language_preference", "en"),
+        "emergency_instructions": doc.get("emergency_instructions"),
         "created_at": doc.get("created_at", datetime.now(timezone.utc).isoformat()),
         "updated_at": doc.get("updated_at"),
     }

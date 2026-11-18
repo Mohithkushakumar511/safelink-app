@@ -7,7 +7,6 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { Card } from '@/components/Card';
 import { Badge } from '@/components/Badge';

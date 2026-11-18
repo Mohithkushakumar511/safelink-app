@@ -1,7 +1,4 @@
-import asyncio
 import logging
-import uuid
-from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from bson import ObjectId
@@ -20,6 +17,7 @@ class DatabaseManager:
         "emergency_contacts": {},
         "sos_alerts": {},
         "location_history": {},
+        "revoked_tokens": {},
     }
 
     async def connect(self):
@@ -100,6 +98,14 @@ class DatabaseManager:
             self._fallback_store["location_history"]
         )
 
+    @property
+    def revoked_tokens(self):
+        return MongoCollectionWrapper(
+            self.db.revoked_tokens if self.is_connected and self.db is not None else None,
+            "revoked_tokens",
+            self._fallback_store["revoked_tokens"]
+        )
+
 
 class MongoCollectionWrapper:
     """
@@ -132,8 +138,12 @@ class MongoCollectionWrapper:
             real_query = dict(query)
             if "_id" in real_query and isinstance(real_query["_id"], str) and ObjectId.is_valid(real_query["_id"]):
                 real_query = {"$or": [{"_id": ObjectId(real_query["_id"])}, {"_id": real_query["_id"]}, {"id": real_query["_id"]}]}
-            elif "id" in real_query:
-                real_query = {"$or": [{"id": real_query["id"]}, {"_id": real_query["id"]}]}
+            elif "id" in real_query and isinstance(real_query["id"], str):
+                target_val = real_query["id"]
+                if ObjectId.is_valid(target_val):
+                    real_query = {"$or": [{"_id": ObjectId(target_val)}, {"_id": target_val}, {"id": target_val}, {"incident_id": target_val}]}
+                else:
+                    real_query = {"$or": [{"id": target_val}, {"_id": target_val}, {"incident_id": target_val}]}
 
             doc = await self.real.find_one(real_query)
             if doc:
@@ -208,6 +218,12 @@ class MongoCollectionWrapper:
             real_query = dict(query)
             if "_id" in real_query and isinstance(real_query["_id"], str) and ObjectId.is_valid(real_query["_id"]):
                 real_query = {"$or": [{"_id": ObjectId(real_query["_id"])}, {"_id": real_query["_id"]}, {"id": real_query["_id"]}]}
+            elif "id" in real_query and isinstance(real_query["id"], str):
+                target_val = real_query["id"]
+                if ObjectId.is_valid(target_val):
+                    real_query = {"$or": [{"_id": ObjectId(target_val)}, {"_id": target_val}, {"id": target_val}, {"incident_id": target_val}]}
+                else:
+                    real_query = {"$or": [{"id": target_val}, {"_id": target_val}, {"incident_id": target_val}]}
             return await self.real.update_one(real_query, update)
 
         doc = await self.find_one(query)
@@ -236,6 +252,12 @@ class MongoCollectionWrapper:
             real_query = dict(query)
             if "_id" in real_query and isinstance(real_query["_id"], str) and ObjectId.is_valid(real_query["_id"]):
                 real_query = {"$or": [{"_id": ObjectId(real_query["_id"])}, {"_id": real_query["_id"]}, {"id": real_query["_id"]}]}
+            elif "id" in real_query and isinstance(real_query["id"], str):
+                target_val = real_query["id"]
+                if ObjectId.is_valid(target_val):
+                    real_query = {"$or": [{"_id": ObjectId(target_val)}, {"_id": target_val}, {"id": target_val}]}
+                else:
+                    real_query = {"$or": [{"id": target_val}, {"_id": target_val}]}
             return await self.real.delete_one(real_query)
 
         doc = await self.find_one(query)
@@ -244,6 +266,19 @@ class MongoCollectionWrapper:
             self.fallback.pop(doc_id, None)
             return type("Result", (), {"deleted_count": 1})
         return type("Result", (), {"deleted_count": 0})
+
+    async def delete_many(self, query: dict):
+        if self.real is not None:
+            return await self.real.delete_many(query)
+
+        count = 0
+        docs = await self.find(query)
+        for d in docs:
+            doc_id = str(d.get("id") or d.get("_id"))
+            if doc_id in self.fallback:
+                self.fallback.pop(doc_id, None)
+                count += 1
+        return type("Result", (), {"deleted_count": count})
 
     async def count_documents(self, query: dict) -> int:
         if self.real is not None:

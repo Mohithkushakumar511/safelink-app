@@ -16,6 +16,11 @@ export interface UserProfile {
   existing_conditions?: string;
   medications?: string;
   share_medical_with_sos?: boolean;
+  cancellation_pin_set?: boolean;
+  qr_token?: string;
+  qr_shared_fields?: string[];
+  language_preference?: string;
+  emergency_instructions?: string;
   created_at: string;
 }
 

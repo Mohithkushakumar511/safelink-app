@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import db_manager
+from app.services.escalation_worker import start_escalation_task, stop_escalation_task
+from app.services.retention_worker import start_retention_task, stop_retention_task
 
 # Import Routers
 from app.routes.auth import router as auth_router
@@ -25,8 +27,14 @@ async def lifespan(app: FastAPI):
     # Startup: Connect to MongoDB & provision initial demo accounts
     logger.info("Starting SafeLink Backend Server...")
     await db_manager.connect()
+    # Start persistent escalation worker
+    start_escalation_task()
+    # Start 48-hour data retention cleanup worker
+    start_retention_task()
     yield
-    # Shutdown: Close DB connections
+    # Shutdown: Stop workers & close DB connections
+    stop_retention_task()
+    stop_escalation_task()
     logger.info("Shutting down SafeLink Backend Server...")
     await db_manager.close()
 

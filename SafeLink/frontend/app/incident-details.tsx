@@ -1,14 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   View,
   Text,
   TouchableOpacity,
-  ScrollView,
   ActivityIndicator,
   Alert,
   Share,
-  Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,7 +20,6 @@ import { Colors } from '@/constants/colors';
 import { api, formatApiError } from '@/services/api';
 import { SosDispatchService } from '@/services/sos';
 import { SafeLinkMapView } from '@/components/MapView';
-import { AppConfig } from '@/constants/config';
 import { AudioService } from '@/services/audio';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -32,7 +29,6 @@ export default function IncidentDetailsScreen() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
 
   const [incident, setIncident] = useState<any | null>(null);
-  const [locations, setLocations] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Audio Playback State
@@ -47,19 +43,6 @@ export default function IncidentDetailsScreen() {
     try {
       const data = await api.sos.getIncident(id);
       setIncident(data);
-
-      try {
-        const locHistory = await api.sos.getLocations(id);
-        if (locHistory && locHistory.length > 0) {
-          setLocations(locHistory);
-        } else if (data.location_history && data.location_history.length > 0) {
-          setLocations(data.location_history);
-        }
-      } catch {
-        if (data.location_history) {
-          setLocations(data.location_history);
-        }
-      }
     } catch (err: any) {
       Alert.alert('Incident Notice', formatApiError(err));
     } finally {
@@ -585,11 +568,46 @@ export default function IncidentDetailsScreen() {
         )}
       </Card>
 
+      {/* Escalation Telemetry Summary Card */}
+      {incident.escalation && (
+        <Card style={styles.metricsCard}>
+          <View style={styles.sectionHeaderRow}>
+            <Ionicons name="git-network-outline" size={18} color={Colors.emergencyRedBright} />
+            <Text style={styles.sectionTitle}>Emergency Escalation Ladder</Text>
+          </View>
+          <View style={styles.metricGrid}>
+            <View style={styles.metricItem}>
+              <Text style={styles.metricLabel}>ESCALATION LEVEL</Text>
+              <Text style={styles.metricValue}>Level {incident.escalation.level || 1}</Text>
+            </View>
+            <View style={styles.metricItem}>
+              <Text style={styles.metricLabel}>STATUS</Text>
+              <Text style={[styles.metricValue, { color: incident.escalation.status === 'ACKNOWLEDGED' ? Colors.safetyGreen : Colors.warningAmber }]}>
+                {incident.escalation.status}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.metricGrid, { marginTop: 10 }]}>
+            <View style={styles.metricItem}>
+              <Text style={styles.metricLabel}>NOTIFICATION ATTEMPTS</Text>
+              <Text style={styles.metricValue}>{incident.escalation.attempts || 1}</Text>
+            </View>
+            <View style={styles.metricItem}>
+              <Text style={styles.metricLabel}>RESPONDER</Text>
+              <Text style={styles.metricValue} numberOfLines={1}>
+                {incident.escalation.acknowledged_by?.contact_name || incident.escalation.current_contact_name || 'Emergency Responder'}
+              </Text>
+            </View>
+          </View>
+        </Card>
+      )}
+
       {/* Chronological Incident Timeline */}
       <Card style={styles.timelineCard}>
         <View style={styles.sectionHeaderRow}>
           <Ionicons name="time" size={18} color={Colors.infoBlue} />
           <Text style={styles.sectionTitle}>Chronological Incident Timeline</Text>
+          <Badge label={`${incident.timeline?.length || 0} EVENTS`} variant="info" style={{ marginLeft: 'auto' }} />
         </View>
 
         <View style={styles.timelineList}>
@@ -599,6 +617,7 @@ export default function IncidentDetailsScreen() {
               title: 'Emergency SOS Activated',
               description: `Initiated by ${incident.user_name || 'User'}`,
               timestamp: incident.activated_at,
+              status: 'Sent',
               icon: 'alert-circle',
             },
             {
@@ -606,6 +625,7 @@ export default function IncidentDetailsScreen() {
               title: 'Initial Location Captured',
               description: `Lat: ${initLat.toFixed(5)}, Lng: ${initLng.toFixed(5)}`,
               timestamp: incident.activated_at,
+              status: 'Sent',
               icon: 'pin',
             },
             {
@@ -613,12 +633,25 @@ export default function IncidentDetailsScreen() {
               title: `Dispatched to ${recipient.recipient_name}`,
               description: `Via ${recipient.sending_method}`,
               timestamp: recipient.submitted_at || incident.activated_at,
+              status: 'Attempted',
               icon: 'paper-plane',
             },
           ]).map((item: any, idx: number) => {
             const isLast = idx === (incident.timeline?.length || 3) - 1;
+            const evtStatus = item.status || 'Sent';
+            const badgeVariant =
+              evtStatus === 'Acknowledged' || evtStatus === 'Resolved'
+                ? 'success'
+                : evtStatus === 'Escalated'
+                ? 'warning'
+                : evtStatus === 'Failed'
+                ? 'danger'
+                : evtStatus === 'Sent'
+                ? 'info'
+                : 'neutral';
+
             return (
-              <View key={idx} style={styles.timelineItem}>
+              <View key={item.id || idx} style={styles.timelineItem}>
                 <View style={styles.timelineIconCol}>
                   <View style={styles.timelineDot}>
                     <Ionicons
@@ -633,11 +666,17 @@ export default function IncidentDetailsScreen() {
                 <View style={styles.timelineContent}>
                   <View style={styles.timelineHeaderRow}>
                     <Text style={styles.timelineItemTitle}>{item.title}</Text>
-                    <Text style={styles.timelineItemTime}>
-                      {formatDate(item.timestamp)}
-                    </Text>
+                    <Badge label={evtStatus} variant={badgeVariant as any} />
                   </View>
+                  <Text style={styles.timelineItemTime}>
+                    {formatDate(item.timestamp)}
+                  </Text>
                   <Text style={styles.timelineItemDesc}>{item.description}</Text>
+                  {item.latitude !== undefined && item.latitude !== null && (
+                    <Text style={{ fontSize: 10, color: '#93C5FD', marginTop: 3 }}>
+                      GPS: {item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}
+                    </Text>
+                  )}
                 </View>
               </View>
             );

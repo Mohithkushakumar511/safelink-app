@@ -145,7 +145,6 @@ export default function HistoryScreen() {
           renderItem={({ item }) => {
             const isAct = item.status === 'ACTIVE';
             const isRes = item.status === 'RESOLVED';
-            const isCan = item.status === 'CANCELLED';
 
             const badgeVariant = isAct ? 'danger' : isRes ? 'success' : 'warning';
             const initialAddr = item.initial_location?.address || item.address || 'GPS Coordinates Recorded';
