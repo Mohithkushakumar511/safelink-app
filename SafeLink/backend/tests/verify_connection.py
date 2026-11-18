@@ -2,8 +2,8 @@ import asyncio
 import sys
 import httpx
 
-BASE_URL = "http://127.0.0.1:8000"
-LAN_URL = "http://192.168.1.6:8000"
+BASE_URL = "http://127.0.0.1:8001"
+LAN_URL = "http://192.168.1.6:8001"
 
 async def test_all():
     print(f"Testing SafeLink API on {BASE_URL} and {LAN_URL}...")

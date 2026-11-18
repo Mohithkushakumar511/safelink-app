@@ -1,5 +1,5 @@
 @echo off
-title SafeLink FastAPI Backend (Port 8000)
+title SafeLink FastAPI Backend (Port 8001)
 cd /d "%~dp0SafeLink\backend"
 
 rem Auto-detect active Wi-Fi IPv4 address
@@ -13,12 +13,12 @@ echo         SAFELINK BACKEND SERVER (FastAPI)
 echo ========================================================
 if not "%DETECTED_IP%"=="" (
     echo   Active Wi-Fi LAN IP : %DETECTED_IP%
-    echo   API Health Check    : http://%DETECTED_IP%:8000/health
+    echo   API Health Check    : http://%DETECTED_IP%:8001/health
 ) else (
     echo   Active Wi-Fi LAN IP : 192.168.1.6
-    echo   API Health Check    : http://192.168.1.6:8000/health
+    echo   API Health Check    : http://192.168.1.6:8001/health
 )
 echo ========================================================
 echo.
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 pause

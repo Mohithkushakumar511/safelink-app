@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 
 const CURRENT_LAN_IP = '192.168.1.6';
-const SERVER_PORT = '8000';
+const SERVER_PORT = '8001';
 
 // Exclude known virtual machine, tunnel, and link-local subnets (VMware, VirtualBox, WSL, APIPA)
 const isVirtualOrInvalidIp = (ip?: string): boolean => {
@@ -51,7 +51,7 @@ const sanitizeApiUrl = (url?: string): string => {
     return clean;
   }
 
-  // In local development on device, ALWAYS dynamically target the active Metro host IP on port 8000
+  // In local development on device, ALWAYS dynamically target the active Metro host IP on port 8001
   // This ensures changing Wi-Fi networks (home, college, mobile hotspot) never breaks the connection
   if (activeIp && !isVirtualOrInvalidIp(activeIp)) {
     return `http://${activeIp}:${SERVER_PORT}`;

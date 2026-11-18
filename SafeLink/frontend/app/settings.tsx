@@ -688,8 +688,8 @@ export default function SettingsScreen() {
         </View>
         <Text style={styles.diagnosticsUrl}>Configured API URL: {AppConfig.apiUrl}</Text>
         <Text style={styles.diagnosticsNote}>
-          • Physical Device: http://192.168.1.6:8000{'\n'}
-          • Web / Emulator: http://localhost:8000
+          • Physical Device: http://192.168.1.6:8001{'\n'}
+          • Web / Emulator: http://localhost:8001
         </Text>
       </Card>
 

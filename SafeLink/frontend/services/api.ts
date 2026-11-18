@@ -142,7 +142,7 @@ export const formatApiError = (error: any): string => {
     if (error.code === 'ECONNABORTED') {
       return (
         `Connection timed out to SafeLink backend at ${AppConfig.apiUrl}.\n` +
-        `Please verify your PC and phone are connected to the same Wi-Fi and port 8000 is open.`
+        `Please verify your PC and phone are connected to the same Wi-Fi and port 8001 is open.`
       );
     }
     if (error.code === 'ERR_NETWORK' || !error.response) {
@@ -150,8 +150,8 @@ export const formatApiError = (error: any): string => {
         `Cannot connect to SafeLink backend at ${AppConfig.apiUrl}.\n\n` +
         `Troubleshooting Checklist:\n` +
         `1. Ensure your PC and mobile device are connected to the same Wi-Fi network.\n` +
-        `2. Verify the backend is running: python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000\n` +
-        `3. Verify Windows Firewall allows inbound connections on port 8000.\n` +
+        `2. Verify the backend is running: python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001\n` +
+        `3. Verify Windows Firewall allows inbound connections on port 8001.\n` +
         `4. Test opening in your phone's browser: ${AppConfig.apiUrl}/health`
       );
     }

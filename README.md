@@ -12,9 +12,9 @@ This repository contains the complete **SafeLink** application inside the `SafeL
    ```bash
    cd SafeLink/backend
    python -m pip install -r requirements.txt
-   python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
    ```
-   API Docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+   API Docs: [http://127.0.0.1:8001/docs](http://127.0.0.1:8001/docs)
 
 2. **Start Frontend**:
    ```bash

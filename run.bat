@@ -4,7 +4,7 @@ echo               SAFELINK LAUNCHER
 echo ========================================================
 echo.
 echo Choose an option to start:
-echo [1] Start SafeLink FastAPI Backend (Port 8000)
+echo [1] Start SafeLink FastAPI Backend (Port 8001)
 echo [2] Start SafeLink Expo Frontend (Auto Wi-Fi LAN)
 echo [3] Start SafeLink Expo Frontend (Tunnel Mode - works on any Wi-Fi/Mobile Data)
 echo [4] Exit
@@ -12,9 +12,9 @@ echo.
 set /p choice=Enter choice (1-4): 
 
 if "%choice%"=="1" (
-    echo Starting FastAPI backend...
+    echo Starting FastAPI backend on port 8001...
     cd "%~dp0SafeLink\backend"
-    python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+    python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ) else if "%choice%"=="2" (
     cd "%~dp0SafeLink\frontend"
     for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias 'Wi-Fi' -ErrorAction SilentlyContinue).IPAddress"') do (

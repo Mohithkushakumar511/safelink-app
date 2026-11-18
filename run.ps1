@@ -3,7 +3,7 @@ Write-Host "              SAFELINK POWERSHELL RUNNER               " -Foreground
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Choose an option to launch:"
-Write-Host "1: Start FastAPI Backend (0.0.0.0:8000)"
+Write-Host "1: Start FastAPI Backend (0.0.0.0:8001)"
 Write-Host "2: Start Expo React Native Frontend (Auto Wi-Fi LAN)"
 Write-Host "3: Start Expo React Native Frontend (Tunnel Mode)"
 Write-Host "4: Exit"
@@ -14,7 +14,7 @@ $choice = Read-Host "Select (1-4)"
 switch ($choice) {
     "1" {
         Set-Location "SafeLink\backend"
-        python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+        python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
     }
     "2" {
         Set-Location "SafeLink\frontend"

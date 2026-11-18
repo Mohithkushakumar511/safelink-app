@@ -137,16 +137,16 @@ SafeLink/
    ALGORITHM=HS256
    ACCESS_TOKEN_EXPIRE_MINUTES=10080
    HOST=0.0.0.0
-   PORT=8000
+   PORT=8001
    CORS_ORIGINS=*
    ```
 4. Start the FastAPI server:
    ```bash
-   python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
    ```
 5. Interactive Swagger API documentation will be available at:
    ```
-   http://127.0.0.1:8000/docs
+   http://127.0.0.1:8001/docs
    ```
 
 ---
@@ -163,12 +163,12 @@ SafeLink/
    ```
 3. Configure frontend environment variables in `frontend/.env`:
    ```ini
-   EXPO_PUBLIC_API_URL=http://localhost:8000
+   EXPO_PUBLIC_API_URL=http://localhost:8001
    EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN=pk.your_mapbox_token_here
    ```
-   * **For Web on same PC**: `http://localhost:8000`
-   * **For Android Emulator**: `http://10.0.2.2:8000`
-   * **For Physical Mobile Phone**: `http://<YOUR_COMPUTER_LAN_IP>:8000` (e.g. `http://192.168.1.5:8000`)
+   * **For Web on same PC**: `http://localhost:8001`
+   * **For Android Emulator**: `http://10.0.2.2:8001`
+   * **For Physical Mobile Phone**: `http://<YOUR_COMPUTER_LAN_IP>:8001` (e.g. `http://192.168.1.6:8001`)
 4. Start the Expo development server:
    ```bash
    npx expo start
